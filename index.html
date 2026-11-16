@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thịnh Vượng — 3D Vietnam City Builder</title>
+    <meta name="description" content="Mô phỏng quy hoạch đô thị và quản trị kinh tế vĩ mô Việt Nam đương đại trong không gian 3D: phân lô, đền bù giải tỏa, thuế đa tầng, thu hút FDI, kinh tế vỉa hè, chống ngập triều cường và điều tiết giao thông." />
+    <meta property="og:title" content="Thịnh Vượng — 3D Vietnam City Builder" />
+    <meta property="og:description" content="Mô phỏng quy hoạch đô thị và quản trị kinh tế vĩ mô Việt Nam đương đại trong không gian 3D: phân lô, đền bù giải tỏa, thuế đa tầng, thu hút FDI, kinh tế vỉa hè, chống ngập triều cường và điều tiết giao thông." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // Vô hiệu hóa sự kiện Context Menu (chuột phải mặc định của trình duyệt)
+      // CHỈ KHI người chơi click vào bên trong thẻ <canvas> của game,
+      // nhường quyền xử lý tín hiệu chuột phải cho hệ thống mở bảng thông tin công trình.
+      window.addEventListener(
+        'contextmenu',
+        function (event) {
+          const target = event.target;
+          if (
+            target instanceof HTMLCanvasElement ||
+            (target instanceof Element && target.closest('canvas'))
+          ) {
+            event.preventDefault();
+          }
+        },
+        { capture: true }
+      );
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

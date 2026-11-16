@@ -1,0 +1,236 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+    user-select: none;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #0c141d;
+    color: #f4f1ea;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-numeral {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 2px rgba(10, 18, 26, 0.85);
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.65);
+}
+
+/* Đảm bảo thứ tự hiển thị (Z-index: 1000) cho lớp phủ HUD cao hơn hẳn lớp 3D WebGL */
+.hud-overlay-layer {
+  z-index: 1000;
+}
+
+/* Khóa Pointer Events cho toàn bộ khung thanh HUD chính để nhận trọn vẹn mọi sự kiện chuột */
+.hud-container,
+.top-bar,
+.bottom-dock {
+  pointer-events: auto !important;
+}
+
+/* Giới hạn chiều cao 80vh và kích hoạt thanh cuộn dọc cho các bảng thông tin */
+.info-panel-scroll {
+  max-height: 80vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Tùy biến thanh cuộn (::-webkit-scrollbar) mỏng, tinh tế phù hợp UI hiện đại */
+.custom-scrollbar,
+.info-panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(251, 191, 36, 0.45) rgba(15, 25, 36, 0.65);
+}
+
+.custom-scrollbar::-webkit-scrollbar,
+.info-panel-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track,
+.info-panel-scroll::-webkit-scrollbar-track {
+  background: rgba(13, 24, 36, 0.75);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb,
+.info-panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(251, 191, 36, 0.45);
+  border-radius: 9999px;
+  border: 1px solid rgba(13, 24, 36, 0.6);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.info-panel-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(251, 191, 36, 0.8);
+}
+
+/* Hiệu ứng rung nhẹ (Shake) lên bảng HUD ngân sách khi không đủ ngân sách */
+@keyframes hudBudgetShake {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  15% {
+    transform: translate3d(-6px, -1px, 0) rotate(-1deg);
+  }
+  30% {
+    transform: translate3d(6px, 1px, 0) rotate(1deg);
+  }
+  45% {
+    transform: translate3d(-5px, 0, 0) rotate(-0.5deg);
+  }
+  60% {
+    transform: translate3d(5px, 0, 0) rotate(0.5deg);
+  }
+  75% {
+    transform: translate3d(-3px, 0, 0);
+  }
+}
+
+.hud-budget-shake {
+  animation: hudBudgetShake 0.48s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+/* Hiệu ứng fade-in mượt mà khi xuất hiện và fade-out khi ẩn đi cho Toast ngân sách ở góc dưới bên phải */
+@keyframes toastFadeIn {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes toastFadeOut {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.96);
+  }
+}
+
+.toast-fade-in {
+  animation: toastFadeIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.toast-fade-out {
+  animation: toastFadeOut 0.32s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Thu nhỏ và tinh chỉnh HUD (.top-bar & .bottom-dock) chuẩn Minimalist UI/UX:
+   Cố định thanh HUD dưới cùng tại bottom: 15px; left: 50%; transform: translateX(-50%);
+   Chừa lại tối thiểu > 85% không gian thoáng cho bản đồ 3D Three.js */
+.top-bar {
+  max-height: 46px;
+}
+
+.bottom-dock {
+  position: fixed;
+  bottom: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-height: 11vh;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.dock-icon-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dock-icon-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.dock-icon-btn:hover {
+  transform: translateY(-2px);
+}
+
+/* Hiệu ứng Tooltip bung tên trượt lên mượt mà ngay khi Hover vào Icon */
+.dock-icon-tooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translate3d(-50%, 8px, 0) scale(0.95);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 1200;
+  transition: opacity 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.16s ease;
+}
+
+.dock-icon-btn:hover .dock-icon-tooltip,
+.dock-icon-btn:focus-visible .dock-icon-tooltip,
+.dock-icon-tooltip.is-active {
+  opacity: 1;
+  visibility: visible;
+  transform: translate3d(-50%, 0, 0) scale(1);
+}
+
+@media (max-width: 639px) {
+  .top-bar {
+    max-height: 68px;
+  }
+
+  .bottom-dock {
+    bottom: 12px;
+    max-height: 11vh;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
+  .info-panel-scroll {
+    max-height: 76vh;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+

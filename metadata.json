@@ -1,0 +1,6 @@
+{
+  "name": "Thịnh Vượng — 3D Vietnam City Builder",
+  "description": "Mô phỏng quy hoạch đô thị và quản trị kinh tế vĩ mô Việt Nam đương đại trong không gian 3D: phân lô, đền bù giải tỏa, thuế đa tầng, thu hút FDI, kinh tế vỉa hè, chống ngập triều cường và điều tiết giao thông.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

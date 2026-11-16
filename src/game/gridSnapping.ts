@@ -1,0 +1,1092 @@
+import {
+  BASE_EMPTY_LAND_PRICE,
+  BASE_MARSH_LAND_PRICE,
+  BUILDING_SPECS,
+  classifyRoadJunction,
+  computeCityLevel,
+  evaluateOnboardingProgress,
+  formatVnd,
+  generateDefaultBuildingIdentity,
+  getToolUnlockRequirementLabel,
+  GRID_SIZE,
+  hasNeighborOfType,
+  isBuiltStructure,
+  isConnectableRoadOrGateway,
+  isRoadTile,
+  isToolUnlockedAtLevel,
+  TILE_LABELS,
+} from './constants';
+import { calculateMacroEconomy, GlobalLedger } from './economy';
+import {
+  CityGameState,
+  CompensationLevel,
+  LedgerEntry,
+  MacroMetrics,
+  RoadConnections,
+  TileData,
+  TileType,
+  ToolId,
+} from './types';
+
+export function getRoadConnections(
+  grid: TileData[][],
+  x: number,
+  z: number
+): RoadConnections {
+  const check = (nx: number, nz: number): boolean => {
+    if (nz < 0 || nz >= grid.length || nx < 0 || nx >= grid[0].length) {
+      return false;
+    }
+    return isConnectableRoadOrGateway(grid[nz][nx].type);
+  };
+  const north = check(x, z - 1);
+  const south = check(x, z + 1);
+  const west = check(x - 1, z);
+  const east = check(x + 1, z);
+  return {
+    north,
+    south,
+    west,
+    east,
+    junctionType: classifyRoadJunction(north, south, west, east),
+  };
+}
+
+export function detectRoadProximitySnap(
+  grid: TileData[][],
+  x: number,
+  z: number
+): {
+  previewConnections: RoadConnections;
+  snappedGapTiles: { x: number; z: number }[];
+  junctionLabel: string;
+} {
+  const snappedGapTiles: { x: number; z: number }[] = [];
+  const dirs = [
+    { dx: 0, dz: -1, key: 'north' as const },
+    { dx: 0, dz: 1, key: 'south' as const },
+    { dx: -1, dz: 0, key: 'west' as const },
+    { dx: 1, dz: 0, key: 'east' as const },
+  ];
+
+  const conn = {
+    north: false,
+    south: false,
+    west: false,
+    east: false,
+  };
+
+  for (const d of dirs) {
+    const nx1 = x + d.dx;
+    const nz1 = z + d.dz;
+    if (nz1 < 0 || nz1 >= grid.length || nx1 < 0 || nx1 >= grid[0].length) {
+      continue;
+    }
+    if (isConnectableRoadOrGateway(grid[nz1][nx1].type)) {
+      conn[d.key] = true;
+    } else {
+      const nx2 = x + d.dx * 2;
+      const nz2 = z + d.dz * 2;
+      const midTile = grid[nz1][nx1];
+      const canAutoSnapMid =
+        (midTile.type === 'empty_land' || midTile.type === 'lowland_marsh') &&
+        midTile.disputeTurns === 0;
+      if (
+        canAutoSnapMid &&
+        nz2 >= 0 &&
+        nz2 < grid.length &&
+        nx2 >= 0 &&
+        nx2 < grid[0].length &&
+        isRoadTile(grid[nz2][nx2].type)
+      ) {
+        conn[d.key] = true;
+        snappedGapTiles.push({ x: nx1, z: nz1 });
+      }
+    }
+  }
+
+  const junctionType = classifyRoadJunction(
+    conn.north,
+    conn.south,
+    conn.west,
+    conn.east
+  );
+
+  const junctionLabel =
+    junctionType === 'crossroad'
+      ? 'Ngã Tư (Cross-Intersection)'
+      : junctionType === 't_junction'
+      ? 'Ngã Ba Chữ T (T-Junction)'
+      : junctionType === 'corner'
+      ? 'Khúc Cua Vuông Góc (L-Corner)'
+      : junctionType === 'straight_we'
+      ? 'Tuyến Đường Ngang (Tây - Đông)'
+      : junctionType === 'straight_ns'
+      ? 'Tuyến Đường Dọc (Bắc - Nam)'
+      : 'Điểm Đường Đơn';
+
+  return {
+    previewConnections: { ...conn, junctionType },
+    snappedGapTiles,
+    junctionLabel,
+  };
+}
+
+export function refreshAllRoadJunctions(grid: TileData[][]): void {
+  for (let z = 0; z < grid.length; z++) {
+    for (let x = 0; x < grid[z].length; x++) {
+      const tile = grid[z][x];
+      if (isRoadTile(tile.type)) {
+        const c = getRoadConnections(grid, x, z);
+        tile.junctionType = c.junctionType;
+      } else {
+        tile.junctionType = undefined;
+      }
+    }
+  }
+}
+
+export function createInitialGrid(seedOffset = 0): TileData[][] {
+  const grid: TileData[][] = [];
+
+  for (let z = 0; z < GRID_SIZE; z++) {
+    const row: TileData[] = [];
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const riverCenter =
+        13 +
+        ((seedOffset % 3) - 1) +
+        Math.round(Math.sin((z + seedOffset) * 0.38));
+      const isRiver = x === riverCenter || x === riverCenter + 1;
+      const isNearRiver = Math.abs(x - riverCenter) <= 2 && !isRiver;
+
+      const type: TileType = isRiver
+        ? 'river_water'
+        : isNearRiver
+        ? 'lowland_marsh'
+        : 'empty_land';
+
+      const elevation = isRiver ? -1 : isNearRiver ? 0 : x < 5 ? 2 : 1;
+      const landValue = isRiver
+        ? 0
+        : isNearRiver
+        ? BASE_MARSH_LAND_PRICE
+        : BASE_EMPTY_LAND_PRICE;
+
+      row.push({
+        x,
+        z,
+        type,
+        elevation,
+        landValue,
+        hasDrainage: false,
+        drainageRemainingDays: 0,
+        isFlooded: false,
+        sidewalkVendors: false,
+        disputeTurns: 0,
+        supplyRatio: 1.0,
+        level: 1,
+        constructionTotalDays: 0,
+        constructionRemainingDays: 0,
+        maxCapacity: 0,
+        currentOccupants: 0,
+        occupantsByTier: { unskilled: 0, skilled: 0, educated: 0 },
+        minimumWealthLevel: 'low',
+        requiredWorkers: { unskilled: 0, skilled: 0, educated: 0 },
+        assignedWorkers: { unskilled: 0, skilled: 0, educated: 0 },
+      });
+    }
+    grid.push(row);
+  }
+
+  return grid;
+}
+
+/**
+ * Kiểm tra điều kiện tiên quyết (Prerequisites) trước khi cho phép khởi công xây dựng bất kỳ công trình nào
+ */
+export function validateBuildPrerequisites(
+  grid: TileData[][],
+  x: number,
+  z: number,
+  targetType: TileType,
+  metrics: MacroMetrics
+): { allowed: boolean; reason?: string } {
+  if (
+    isRoadTile(targetType) ||
+    targetType === 'agr_farm' ||
+    targetType === 'util_power_water'
+  ) {
+    return { allowed: true };
+  }
+
+  const nearAnyRoad = hasNeighborOfType(grid, x, z, [
+    'road_alley',
+    'road_urban',
+    'road_highway',
+  ]);
+  const nearMainRoad = hasNeighborOfType(grid, x, z, [
+    'road_urban',
+    'road_highway',
+  ]);
+
+  if (!nearAnyRoad) {
+    return {
+      allowed: false,
+      reason: `Điều kiện quy hoạch: Không thể xây ${TILE_LABELS[targetType]} giữa đất trống chưa có đường! Hãy xây Đường Hẻm [1], Đường Nhựa [2] hoặc Cao Tốc [3] dẫn tới ô (${x + 1}, ${z + 1}) trước.`,
+    };
+  }
+
+  const requiresMainRoad =
+    targetType === 'res_high' ||
+    targetType === 'com_mall' ||
+    targetType === 'ind_fdi' ||
+    targetType === 'pub_edu_med' ||
+    targetType === 'pub_hospital' ||
+    targetType === 'priv_hospital' ||
+    targetType === 'priv_school' ||
+    targetType === 'showbiz_stadium';
+
+  if (requiresMainRoad && !nearMainRoad) {
+    return {
+      allowed: false,
+      reason: `Điều kiện hạ tầng: ${TILE_LABELS[targetType]} có quy mô lớn, xe cứu hỏa và xe cấp cứu không thể vào Đường Hẻm [1]! Bắt buộc phải đặt sát cạnh Đường Nhựa Đô Thị [2] hoặc Cao Tốc [3].`,
+    };
+  }
+
+  const requiresPowerWater =
+    targetType === 'com_mall' ||
+    targetType === 'ind_fdi' ||
+    targetType === 'showbiz_stadium';
+
+  if (requiresPowerWater) {
+    let hasPowerWater = false;
+    for (let rz = 0; rz < grid.length; rz++) {
+      for (let rx = 0; rx < grid[rz].length; rx++) {
+        if (grid[rz][rx].type === 'util_power_water') {
+          hasPowerWater = true;
+          break;
+        }
+      }
+    }
+    if (!hasPowerWater) {
+      return {
+        allowed: false,
+        reason: `Điều kiện tiện ích: Cần xây ít nhất 1 công trình Thủy Lợi, Điện & Cấp Thoát Nước [I] trước khi khởi công ${TILE_LABELS[targetType]}!`,
+      };
+    }
+  }
+
+  if (targetType === 'ind_fdi' && metrics.pci < 55) {
+    return {
+      allowed: false,
+      reason: `Điều kiện thu hút FDI: Chỉ số PCI hiện tại (${metrics.pci}/100) chưa đạt ngưỡng 55 để tập đoàn bán dẫn đặt nhà máy! Hãy xây UBND [U], Thủy Lợi & Điện [I] hoặc ưu đãi thuế FDI.`,
+    };
+  }
+
+  if (targetType === 'showbiz_stadium' && metrics.population < 80) {
+    return {
+      allowed: false,
+      reason: `Điều kiện dân sinh: Thành phố cần đạt tối thiểu 80 cư dân (hiện có ${metrics.population} người) mới đủ điều kiện khởi công Tổ Hợp Sân Vận Động & Showbiz [J]!`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Kiểm tra va chạm (Collision Detection) cho Mô hình 3D Ghost Preview (`previewMesh`)
+ */
+export function detectGhostCollision(
+  grid: TileData[][],
+  x: number,
+  z: number,
+  toolId?: ToolId
+): {
+  isColliding: boolean;
+  collidedWithType: TileType | null;
+  collidedWithLabel: string | null;
+  collisionReason: string | null;
+} {
+  if (
+    !toolId ||
+    toolId === 'inspect' ||
+    toolId === 'act_clearance' ||
+    toolId === 'sub_drainage'
+  ) {
+    return {
+      isColliding: false,
+      collidedWithType: null,
+      collidedWithLabel: null,
+      collisionReason: null,
+    };
+  }
+
+  if (z < 0 || z >= grid.length || x < 0 || x >= grid[0].length) {
+    return {
+      isColliding: false,
+      collidedWithType: null,
+      collidedWithLabel: null,
+      collisionReason: null,
+    };
+  }
+
+  const tile = grid[z][x];
+  if (isBuiltStructure(tile.type)) {
+    const label = TILE_LABELS[tile.type];
+    return {
+      isColliding: true,
+      collidedWithType: tile.type,
+      collidedWithLabel: label,
+      collisionReason: `Va chạm công trình: Không thể đặt đè lên ${label}!`,
+    };
+  }
+
+  return {
+    isColliding: false,
+    collidedWithType: null,
+    collidedWithLabel: null,
+    collisionReason: null,
+  };
+}
+
+/**
+ * Kiểm tra nhanh ô đất (x, z) có đủ điều kiện đặt công trình/công cụ đang chọn hay không
+ */
+export function canPlaceToolAtTile(
+  state: CityGameState,
+  x: number,
+  z: number,
+  toolId?: ToolId,
+  bypassLevelLock = true
+): {
+  allowed: boolean;
+  isGhostBuilding: boolean;
+  isColliding: boolean;
+  collidedWithLabel?: string;
+  reason?: string;
+} {
+  const activeTool = toolId ?? state.selectedTool;
+  if (
+    activeTool === 'inspect' ||
+    activeTool === 'act_clearance' ||
+    activeTool === 'sub_drainage'
+  ) {
+    return { allowed: false, isGhostBuilding: false, isColliding: false };
+  }
+
+  if (z < 0 || z >= state.grid.length || x < 0 || x >= state.grid[0].length) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: 'Tọa độ ngoài phạm vi quy hoạch.',
+    };
+  }
+
+  const tile = state.grid[z][x];
+  const targetType = activeTool as TileType;
+  const spec = BUILDING_SPECS[targetType];
+  if (!spec) {
+    return { allowed: false, isGhostBuilding: false, isColliding: false };
+  }
+
+  const collision = detectGhostCollision(state.grid, x, z, activeTool);
+  if (collision.isColliding) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: true,
+      collidedWithLabel: collision.collidedWithLabel ?? undefined,
+      reason:
+        collision.collisionReason ?? 'Ô đất đã có công trình hiện hữu.',
+    };
+  }
+
+  if (
+    !bypassLevelLock &&
+    !isToolUnlockedAtLevel(activeTool, state.cityLevel ?? 1)
+  ) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: getToolUnlockRequirementLabel(activeTool),
+    };
+  }
+
+  if (state.treasury < 0) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: 'Ngân sách không đủ',
+    };
+  }
+
+  if (tile.disputeTurns > 0) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: 'Đang vướng khiếu kiện giải phóng mặt bằng.',
+    };
+  }
+
+  if (
+    tile.type === 'river_water' &&
+    targetType !== 'road_urban' &&
+    targetType !== 'road_highway'
+  ) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: 'Chỉ có thể xây cầu đường bộ qua sông.',
+    };
+  }
+
+  const prereq = validateBuildPrerequisites(
+    state.grid,
+    x,
+    z,
+    targetType,
+    state.metrics
+  );
+  if (!prereq.allowed) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: prereq.reason,
+    };
+  }
+
+  const bridgeSurcharge = tile.type === 'river_water' ? 0.35 : 0;
+  const totalCost = spec.costBillion + bridgeSurcharge;
+  if (state.treasury < totalCost) {
+    return {
+      allowed: false,
+      isGhostBuilding: true,
+      isColliding: false,
+      reason: 'Ngân sách không đủ',
+    };
+  }
+
+  return { allowed: true, isGhostBuilding: true, isColliding: false };
+}
+
+export function calculateLandClearanceCost(
+  tile: TileData,
+  compensationLevel: CompensationLevel
+): {
+  canClear: boolean;
+  isWildLandClearance: boolean;
+  compensationCost: number;
+  protestDelayTurns: number;
+  stabilityPenalty: number;
+} {
+  if (tile.type === 'river_water') {
+    return {
+      canClear: false,
+      isWildLandClearance: false,
+      compensationCost: 0,
+      protestDelayTurns: 0,
+      stabilityPenalty: 0,
+    };
+  }
+
+  const multiplier =
+    compensationLevel === 'low'
+      ? 0.65
+      : compensationLevel === 'fair'
+      ? 1.0
+      : 1.35;
+
+  if (!isBuiltStructure(tile.type)) {
+    const baseWildPrice =
+      tile.type === 'lowland_marsh'
+        ? BASE_MARSH_LAND_PRICE
+        : BASE_EMPTY_LAND_PRICE;
+    const wildCost = Number(
+      Math.max(0.0005, Math.min(0.001, baseWildPrice * multiplier)).toFixed(4)
+    );
+    return {
+      canClear: true,
+      isWildLandClearance: true,
+      compensationCost: wildCost,
+      protestDelayTurns: 0,
+      stabilityPenalty: 0,
+    };
+  }
+
+  const structureWeight =
+    tile.type === 'res_high' || tile.type === 'com_mall'
+      ? 1.15
+      : tile.type === 'com_market' || tile.type === 'res_mid'
+      ? 1.0
+      : 0.85;
+
+  const compensationCost = Number(
+    Math.max(0.005, tile.landValue * multiplier * structureWeight).toFixed(3)
+  );
+
+  const protestDelayTurns =
+    compensationLevel === 'low' && !isRoadTile(tile.type) ? 2 : 0;
+  const stabilityPenalty =
+    compensationLevel === 'low' ? 6 : compensationLevel === 'fair' ? 1 : -2;
+
+  return {
+    canClear: true,
+    isWildLandClearance: false,
+    compensationCost,
+    protestDelayTurns,
+    stabilityPenalty,
+  };
+}
+
+export interface ToolActionResult {
+  nextState: CityGameState;
+  success: boolean;
+  message: string;
+  costDelta: number;
+  effectType: 'build' | 'clearance' | 'drainage' | 'inspect' | 'error';
+}
+
+function initializeTileWithSpec(
+  tile: TileData,
+  targetType: TileType,
+  instanceSeq: number
+): void {
+  const spec = BUILDING_SPECS[targetType];
+  const { instanceId, customName } = generateDefaultBuildingIdentity(
+    targetType,
+    instanceSeq
+  );
+  tile.type = targetType;
+  tile.instanceId = instanceId;
+  tile.customName = customName;
+  tile.constructionTotalDays = spec.constructionDays;
+  tile.constructionRemainingDays = spec.constructionDays;
+  tile.maxCapacity = spec.maxCapacity;
+  tile.currentOccupants = 0;
+  tile.occupantsByTier = { unskilled: 0, skilled: 0, educated: 0 };
+  tile.minimumWealthLevel = spec.minimumWealthLevel;
+  tile.requiredWorkers = { ...spec.requiredWorkers };
+  tile.assignedWorkers = { unskilled: 0, skilled: 0, educated: 0 };
+  tile.revenue = 0;
+  tile.taxPIT = 0;
+  tile.taxCIT = 0;
+  tile.maintenanceCost = Number(spec.maintenanceBillion.toFixed(4));
+  tile.netIncome = Number((-spec.maintenanceBillion).toFixed(4));
+  tile.landValue = Number(
+    Math.min(
+      180,
+      tile.landValue + Math.max(0.02, spec.costBillion * 0.85)
+    ).toFixed(3)
+  );
+  if (targetType === 'road_highway' || targetType === 'ind_fdi') {
+    tile.hasDrainage = true;
+  }
+}
+
+export function applyToolToTile(
+  state: CityGameState,
+  x: number,
+  z: number,
+  toolId?: ToolId,
+  bypassLevelLock?: boolean
+): ToolActionResult {
+  const activeTool = toolId ?? state.selectedTool;
+  const shouldBypassLevelLock = bypassLevelLock ?? (toolId !== undefined);
+
+  if (z < 0 || z >= state.grid.length || x < 0 || x >= state.grid[0].length) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Tọa độ ngoài phạm vi quy hoạch.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const nextGrid = state.grid.map((row) =>
+    row.map((cell) => ({
+      ...cell,
+      occupantsByTier: { ...cell.occupantsByTier },
+      requiredWorkers: { ...cell.requiredWorkers },
+      assignedWorkers: { ...cell.assignedWorkers },
+    }))
+  );
+  const tile = nextGrid[z][x];
+  const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+
+  if (activeTool === 'inspect') {
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner: `Đang khảo sát ô (${x + 1}, ${z + 1}): ${TILE_LABELS[tile.type]} — Giá đất ${formatVnd(tile.landValue, true)}.`,
+      },
+      success: true,
+      message: `Đã chọn ô (${x + 1}, ${z + 1})`,
+      costDelta: 0,
+      effectType: 'inspect',
+    };
+  }
+
+  if (
+    !shouldBypassLevelLock &&
+    !isToolUnlockedAtLevel(activeTool, state.cityLevel ?? 1)
+  ) {
+    const reqMsg = getToolUnlockRequirementLabel(activeTool);
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner: `🔒 Chưa mở khóa công trình: ${reqMsg}!`,
+      },
+      success: false,
+      message: reqMsg,
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  if (state.treasury < 0) {
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner: `Ngân sách không đủ! Ngân sách hiện đang âm (${formatVnd(state.treasury, true)}), không thể thi công công trình mới.`,
+      },
+      success: false,
+      message: 'Ngân sách không đủ',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  if (activeTool === 'sub_drainage') {
+    if (tile.type === 'river_water') {
+      return {
+        nextState: { ...state, selectedTile: { x, z } },
+        success: false,
+        message: 'Không thể lắp ống thoát nước trực tiếp trên lòng sông.',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+    if (
+      tile.hasDrainage ||
+      (tile.drainageRemainingDays && tile.drainageRemainingDays > 0)
+    ) {
+      return {
+        nextState: { ...state, selectedTile: { x, z } },
+        success: false,
+        message: 'Phân khu này đã có hoặc đang lắp đặt ống cống thoát nước.',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+    const cost = 0.015;
+    if (state.treasury < cost) {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner: `Ngân sách không đủ! Cần ${formatVnd(cost, true)} để lắp Ống Thoát Nước nhưng hiện chỉ có ${formatVnd(state.treasury, true)}.`,
+        },
+        success: false,
+        message: 'Ngân sách không đủ',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+
+    tile.drainageRemainingDays = 1;
+    tile.landValue = Number((tile.landValue + 0.02).toFixed(3));
+
+    const nextTreasury = Number((state.treasury - cost).toFixed(4));
+    const nextMetrics = calculateMacroEconomy(
+      nextGrid,
+      state.policies,
+      state.season,
+      state.activeConcertMonths,
+      nextTreasury,
+      state.crisisMonthsElapsed
+    );
+    const nextCityLevel = computeCityLevel(
+      nextMetrics.population,
+      nextTreasury,
+      state.cityLevel ?? 1
+    );
+    const obEval = evaluateOnboardingProgress(
+      nextGrid,
+      nextMetrics.population,
+      nextCityLevel,
+      state.completedQuests ?? []
+    );
+
+    return {
+      nextState: {
+        ...state,
+        treasury: nextTreasury,
+        bestPci: Math.max(state.bestPci, nextMetrics.pci),
+        selectedTile: { x, z },
+        grid: nextGrid,
+        regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+        metrics: nextMetrics,
+        cityLevel: nextCityLevel,
+        onboardingStep: obEval.onboardingStep,
+        onboardingCompleted: obEval.onboardingCompleted,
+        completedQuests: obEval.completedQuests,
+        lastEventBanner: `Đang lắp Ống Thoát Nước tại (${x + 1}, ${z + 1}) (-${formatVnd(cost, true)} · Hoàn thiện sau 1 ngày).`,
+      },
+      success: true,
+      message: 'Đang lắp đặt ống thoát nước (1 ngày)',
+      costDelta: -cost,
+      effectType: 'drainage',
+    };
+  }
+
+  if (activeTool === 'act_clearance') {
+    const clearance = calculateLandClearanceCost(
+      tile,
+      state.policies.compensationLevel
+    );
+    if (!clearance.canClear) {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner: 'Không thể giải tỏa lòng sông tự nhiên.',
+        },
+        success: false,
+        message: 'Không thể giải tỏa lòng sông.',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+
+    if (state.treasury < clearance.compensationCost) {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner: `Ngân sách không đủ! Cần ${formatVnd(clearance.compensationCost, true)} đền bù giải tỏa nhưng hiện chỉ có ${formatVnd(state.treasury, true)}.`,
+        },
+        success: false,
+        message: 'Ngân sách không đủ',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+
+    const oldName = tile.customName ?? TILE_LABELS[tile.type];
+    tile.type = tile.elevation === 0 ? 'lowland_marsh' : 'empty_land';
+    tile.instanceId = undefined;
+    tile.customName = undefined;
+    tile.revenue = 0;
+    tile.taxPIT = 0;
+    tile.taxCIT = 0;
+    tile.maintenanceCost = 0;
+    tile.netIncome = 0;
+    tile.sidewalkVendors = false;
+    tile.disputeTurns = clearance.protestDelayTurns;
+    tile.constructionTotalDays = 0;
+    tile.constructionRemainingDays = 0;
+    tile.maxCapacity = 0;
+    tile.currentOccupants = 0;
+    tile.occupantsByTier = { unskilled: 0, skilled: 0, educated: 0 };
+    tile.requiredWorkers = { unskilled: 0, skilled: 0, educated: 0 };
+    tile.assignedWorkers = { unskilled: 0, skilled: 0, educated: 0 };
+    tile.landValue =
+      tile.elevation === 0 ? BASE_MARSH_LAND_PRICE : BASE_EMPTY_LAND_PRICE;
+
+    const nextTreasury = Number(
+      (state.treasury - clearance.compensationCost).toFixed(4)
+    );
+    const nextMetrics = calculateMacroEconomy(
+      nextGrid,
+      state.policies,
+      state.season,
+      state.activeConcertMonths,
+      nextTreasury,
+      state.crisisMonthsElapsed
+    );
+
+    const protestNote = clearance.isWildLandClearance
+      ? ' (Đền bù san lấp đất nông nghiệp/đất hoang)'
+      : clearance.protestDelayTurns > 0
+      ? ` (Đền bù thấp gây khiếu kiện, chậm tiến độ ${clearance.protestDelayTurns} tháng!)`
+      : ' (Người dân đồng thuận bàn giao mặt bằng sạch)';
+
+    return {
+      nextState: {
+        ...state,
+        treasury: nextTreasury,
+        bestPci: Math.max(state.bestPci, nextMetrics.pci),
+        selectedTile: { x, z },
+        grid: nextGrid,
+        regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+        metrics: nextMetrics,
+        lastEventBanner: `Đã giải tỏa ${oldName} tại (${x + 1}, ${z + 1}): -${formatVnd(clearance.compensationCost, true)}${protestNote}`,
+      },
+      success: true,
+      message: 'Giải tỏa mặt bằng thành công',
+      costDelta: -clearance.compensationCost,
+      effectType: 'clearance',
+    };
+  }
+
+  if (tile.disputeTurns > 0) {
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner: `Ô đất (${x + 1}, ${z + 1}) đang vướng khiếu kiện đền bù, còn chờ ${tile.disputeTurns} tháng!`,
+      },
+      success: false,
+      message: 'Đang vướng khiếu kiện giải phóng mặt bằng.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  if (
+    tile.type === 'river_water' &&
+    activeTool !== 'road_urban' &&
+    activeTool !== 'road_highway'
+  ) {
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner:
+          'Trên sông Thịnh Vượng chỉ có thể quy hoạch cầu Đường Nhựa [2] hoặc Cao Tốc [3].',
+      },
+      success: false,
+      message: 'Chỉ có thể xây cầu đường bộ qua sông.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  if (isBuiltStructure(tile.type)) {
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner: `Ô (${x + 1}, ${z + 1}) đã có ${TILE_LABELS[tile.type]}. Hãy dùng "Đền Bù Giải Tỏa [B]" hoặc Chuột phải vào công trình để giải tỏa trước!`,
+      },
+      success: false,
+      message: 'Cần Đền Bù Giải Tỏa công trình hiện hữu trước.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const targetType = activeTool as TileType;
+  const spec = BUILDING_SPECS[targetType];
+  if (!spec || spec.costBillion <= 0) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Công cụ không hợp lệ.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+  const bridgeSurcharge = tile.type === 'river_water' ? 0.35 : 0;
+
+  const prereqCheck = validateBuildPrerequisites(
+    nextGrid,
+    x,
+    z,
+    targetType,
+    state.metrics
+  );
+  if (!prereqCheck.allowed) {
+    return {
+      nextState: {
+        ...state,
+        selectedTile: { x, z },
+        lastEventBanner: prereqCheck.reason ?? 'Chưa đủ điều kiện xây dựng.',
+      },
+      success: false,
+      message: prereqCheck.reason ?? 'Chưa đủ điều kiện xây dựng.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  let totalCost = spec.costBillion + bridgeSurcharge;
+  let snapMessage = '';
+  let nextSeq = state.nextInstanceSeq || 1;
+
+  if (isRoadTile(targetType)) {
+    const snapInfo = detectRoadProximitySnap(nextGrid, x, z);
+    const extraSnapCost = snapInfo.snappedGapTiles.length * spec.costBillion;
+    if (state.treasury < totalCost + extraSnapCost) {
+      if (state.treasury < totalCost) {
+        return {
+          nextState: {
+            ...state,
+            selectedTile: { x, z },
+            lastEventBanner: `Ngân sách không đủ! Cần ${formatVnd(totalCost, true)} để xây ${TILE_LABELS[targetType]} nhưng hiện chỉ còn ${formatVnd(state.treasury, true)}.`,
+          },
+          success: false,
+          message: 'Ngân sách không đủ',
+          costDelta: 0,
+          effectType: 'error',
+        };
+      }
+      initializeTileWithSpec(tile, targetType, nextSeq++);
+    } else {
+      initializeTileWithSpec(tile, targetType, nextSeq++);
+      if (snapInfo.snappedGapTiles.length > 0) {
+        for (const gap of snapInfo.snappedGapTiles) {
+          const gapTile = nextGrid[gap.z][gap.x];
+          initializeTileWithSpec(gapTile, targetType, nextSeq++);
+          totalCost += spec.costBillion;
+        }
+        snapMessage = ` · Tự động bắt dính nối liền ${snapInfo.snappedGapTiles.length} ô đường tạo ${snapInfo.junctionLabel}`;
+      }
+    }
+
+    refreshAllRoadJunctions(nextGrid);
+    if (!snapMessage) {
+      const updatedConn = getRoadConnections(nextGrid, x, z);
+      if (updatedConn.junctionType === 'crossroad') {
+        snapMessage = ' · Tự động khớp nối tạo Ngã Tư (Cross-Intersection)';
+      } else if (updatedConn.junctionType === 't_junction') {
+        snapMessage = ' · Tự động khớp nối tạo Ngã Ba Chữ T (T-Junction)';
+      } else if (updatedConn.junctionType === 'corner') {
+        snapMessage = ' · Tự động khớp nối tạo Góc Cua (L-Junction)';
+      }
+    }
+  } else {
+    if (state.treasury < totalCost) {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner: `Ngân sách không đủ! Cần ${formatVnd(totalCost, true)} để khởi công ${TILE_LABELS[targetType]} nhưng hiện chỉ còn ${formatVnd(state.treasury, true)}.`,
+        },
+        success: false,
+        message: 'Ngân sách không đủ',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+    initializeTileWithSpec(tile, targetType, nextSeq++);
+  }
+
+  refreshAllRoadJunctions(nextGrid);
+  const nextTreasury = Number((state.treasury - totalCost).toFixed(4));
+  const nextMetrics = calculateMacroEconomy(
+    nextGrid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed
+  );
+
+  const buildLedgerEntry: LedgerEntry = {
+    id: `BUILD-Y${state.year}-M${state.month}-D${state.day}-${tile.instanceId ?? nextSeq}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Khởi công ${tile.customName ?? TILE_LABELS[targetType]} (${tile.instanceId}) tại (${x + 1}, ${z + 1})`,
+    totalRevenue: 0,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: Number(totalCost.toFixed(4)),
+    buildingMaintenanceCost: isRoadTile(targetType) ? 0 : Number(totalCost.toFixed(4)),
+    infraMaintenanceCost: isRoadTile(targetType) ? Number(totalCost.toFixed(4)) : 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    netIncome: Number((-totalCost).toFixed(4)),
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: isRoadTile(targetType) ? 1 : 0,
+    activeEntityCount: 1,
+    entityBreakdown: [
+      {
+        instanceId: tile.instanceId ?? `BLD-${nextSeq}`,
+        customName: tile.customName ?? TILE_LABELS[targetType],
+        tileType: targetType,
+        x,
+        z,
+        occupantsOrWorkers:
+          spec.maxCapacity > 0
+            ? `0/${spec.maxCapacity} dân`
+            : `${
+                spec.requiredWorkers.unskilled +
+                spec.requiredWorkers.skilled +
+                spec.requiredWorkers.educated
+              } nhân sự`,
+        revenue: 0,
+        taxCIT: 0,
+        taxPIT: 0,
+        maintenanceCost: Number(totalCost.toFixed(4)),
+        netIncome: Number((-totalCost).toFixed(4)),
+      },
+    ],
+  };
+
+  const nextGlobalLedger = [...(state.globalLedger ?? []), buildLedgerEntry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  const capNote =
+    spec.maxCapacity > 0
+      ? ` · Sức chứa 0/${spec.maxCapacity} người`
+      : spec.requiredWorkers.unskilled +
+          spec.requiredWorkers.skilled +
+          spec.requiredWorkers.educated >
+        0
+      ? ` · Cần 0/${
+          spec.requiredWorkers.unskilled +
+          spec.requiredWorkers.skilled +
+          spec.requiredWorkers.educated
+        } nhân sự`
+      : '';
+
+  const nextCityLevel = computeCityLevel(
+    nextMetrics.population,
+    nextTreasury,
+    state.cityLevel ?? 1
+  );
+  const obEval = evaluateOnboardingProgress(
+    nextGrid,
+    nextMetrics.population,
+    nextCityLevel,
+    state.completedQuests ?? []
+  );
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      bestPci: Math.max(state.bestPci, nextMetrics.pci),
+      selectedTile: { x, z },
+      grid: nextGrid,
+      regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+      metrics: nextMetrics,
+      nextInstanceSeq: nextSeq,
+      globalLedger: nextGlobalLedger,
+      cityLevel: nextCityLevel,
+      onboardingStep: obEval.onboardingStep,
+      onboardingCompleted: obEval.onboardingCompleted,
+      completedQuests: obEval.completedQuests,
+      lastEventBanner: `Khởi công ${tile.customName ?? TILE_LABELS[targetType]} [${tile.instanceId}] tại (${x + 1}, ${z + 1}): -${formatVnd(totalCost, true)} · Hoàn thiện sau ${spec.constructionDays} ngày${capNote}${snapMessage}.`,
+    },
+    success: true,
+    message: `Khởi công ${TILE_LABELS[targetType]}`,
+    costDelta: -totalCost,
+    effectType: 'build',
+  };
+}
