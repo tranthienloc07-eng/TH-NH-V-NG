@@ -15,12 +15,16 @@ import {
   applyToolToTile,
   calculateLandClearanceCost,
   calculateMacroEconomy,
+  canPlaceToolAtTile,
   CITY_LEVEL_SPECS,
   clearSavedGameState,
+  continueEndlessAfterVictory,
   createInitialGameState,
   evaluateOnboardingProgress,
+  evaluatePlacementRisk,
   formatVnd,
   generateCityAdvisorBriefing,
+  getBuildingFinancialPreview,
   getPolicyUnlockRequirementLabel,
   getRegionName,
   getToolUnlockRequirementLabel,
@@ -41,8 +45,11 @@ import {
 } from './game/rules';
 import {
   AdvisorRecommendation,
+  BuildingFinancialPreview,
   CityGameState,
+  DifficultyLevel,
   MacroPolicies,
+  PlacementRiskEvaluation,
   SeasonType,
   ToolId,
 } from './game/types';
@@ -97,6 +104,13 @@ function renderMinimalistDockIcon(iconId: string): React.ReactNode {
           <path d="M2 20L5 4M19 4l3 16M9 4v16M15 4v16M12 6v3M12 14v3" />
         </svg>
       );
+    case 'road_ring':
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="8" />
+          <circle cx="12" cy="12" r="4" />
+        </svg>
+      );
 
     // Zoning tools
     case 'res_low':
@@ -148,6 +162,20 @@ function renderMinimalistDockIcon(iconId: string): React.ReactNode {
         <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="7" y="7" width="10" height="10" rx="1" />
           <path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4" />
+        </svg>
+      );
+    case 'com_office':
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="2" width="16" height="20" rx="2" />
+          <path d="M9 6h6M9 10h6M9 14h6M10 22v-4h4v4" />
+        </svg>
+      );
+    case 'ind_food':
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 20h18V10l-5-4H8l-5 4v10z" />
+          <path d="M9 14h6M12 11v6" />
         </svg>
       );
 
@@ -308,6 +336,13 @@ export default function App() {
     title: string;
     shortcut: string;
     meta?: string;
+    financialPreview?: BuildingFinancialPreview;
+  } | null>(null);
+  const [pendingPlacementRisk, setPendingPlacementRisk] = useState<{
+    x: number;
+    z: number;
+    toolId: ToolId;
+    risk: PlacementRiskEvaluation;
   } | null>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverTileInfo | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -398,15 +433,50 @@ export default function App() {
     document.body.dataset.state = gameState.mode;
   }, [gameState.mode]);
 
-  // Kéo giãn bộ đếm thời gian (Time Tick System): 1 ngày trong game = 5 đến 8 giây thực tế (mặc định 6000ms = 6s/ngày)
+  // Vòng lặp requestAnimationFrame Accumulator (accumulator += Math.min(dt, 100)), tự động đóng băng khi document.visibilityState === 'hidden'
   useEffect(() => {
     if (gameState.mode !== 'playing') return;
     const intervalMs = gameState.dayTickIntervalMs || 6000;
-    const timer = window.setInterval(() => {
-      setGameState((prev) => stepSimulationDay(prev));
-    }, intervalMs);
-    return () => window.clearInterval(timer);
+    let rafId = 0;
+    let lastTime = performance.now();
+    let accumulator = 0;
+
+    const loop = (now: number) => {
+      if (document.visibilityState === 'hidden') {
+        lastTime = now;
+      } else {
+        const dt = Math.max(0, now - lastTime);
+        lastTime = now;
+        accumulator += Math.min(dt, 100);
+        if (accumulator >= intervalMs) {
+          accumulator -= intervalMs;
+          setGameState((prev) => stepSimulationDay(prev));
+        }
+      }
+      rafId = window.requestAnimationFrame(loop);
+    };
+
+    rafId = window.requestAnimationFrame(loop);
+    return () => window.cancelAnimationFrame(rafId);
   }, [gameState.mode, gameState.dayTickIntervalMs]);
+
+  const handleSelectDifficulty = useCallback((diff: DifficultyLevel) => {
+    soundEngine.playClick();
+    setGameState(() => {
+      const fresh = createInitialGameState(false, diff);
+      const ts = saveGameStateToLocalStorage(fresh);
+      return ts ? { ...fresh, lastSavedAt: ts } : fresh;
+    });
+  }, []);
+
+  const handleContinueEndless = useCallback(() => {
+    soundEngine.playBuild();
+    setGameState((prev) => {
+      const next = continueEndlessAfterVictory(prev);
+      const ts = saveGameStateToLocalStorage(next);
+      return ts ? { ...next, lastSavedAt: ts } : next;
+    });
+  }, []);
 
   const handleStartGame = useCallback(() => {
     soundEngine.playBuild();
@@ -431,6 +501,7 @@ export default function App() {
     }
     setActivePolicyDrawer(null);
     setContextMenu(null);
+    setPendingPlacementRisk(null);
     setRegionMapOpen(false);
     setSettlementModalOpen(false);
     setAdvisorHudOpen(false);
@@ -438,15 +509,18 @@ export default function App() {
     setBudgetToast(null);
     setBudgetToastClosing(false);
     clearSavedGameState();
-    const freshState = createInitialGameState(true);
-    const ts = saveGameStateToLocalStorage(freshState);
-    setGameState(ts ? { ...freshState, lastSavedAt: ts } : freshState);
+    setGameState((prev) => {
+      const freshState = createInitialGameState(true, prev.difficulty);
+      const ts = saveGameStateToLocalStorage(freshState);
+      return ts ? { ...freshState, lastSavedAt: ts } : freshState;
+    });
   }, []);
 
   const handleReturnTitle = useCallback(() => {
     soundEngine.playClick();
     setActivePolicyDrawer(null);
     setContextMenu(null);
+    setPendingPlacementRisk(null);
     setRegionMapOpen(false);
     setSettlementModalOpen(false);
     setAdvisorHudOpen(false);
@@ -454,7 +528,7 @@ export default function App() {
     setBudgetToast(null);
     setBudgetToastClosing(false);
     clearSavedGameState();
-    setGameState(createInitialGameState(false));
+    setGameState((prev) => createInitialGameState(false, prev.difficulty));
   }, []);
 
   const handleClearAutoSave = useCallback(() => {
@@ -570,9 +644,44 @@ export default function App() {
         }));
         return;
       }
+
+      // Pre-flight Check (evaluatePlacementRisk): Kiểm tra thiếu nhân sự hoặc Upkeep > 15% thu nhập dự kiến trước khi trừ tiền
+      if (
+        gameState.selectedTool !== 'inspect' &&
+        gameState.selectedTool !== 'act_clearance' &&
+        gameState.selectedTool !== 'sub_drainage' &&
+        gameState.treasury >= 0
+      ) {
+        const placeCheck = canPlaceToolAtTile(
+          gameState,
+          x,
+          z,
+          gameState.selectedTool,
+          false
+        );
+        if (placeCheck.allowed) {
+          const riskEval = evaluatePlacementRisk(
+            gameState,
+            gameState.selectedTool,
+            x,
+            z
+          );
+          if (riskEval.hasRisk) {
+            soundEngine.playClick();
+            setPendingPlacementRisk({
+              x,
+              z,
+              toolId: gameState.selectedTool,
+              risk: riskEval,
+            });
+            return;
+          }
+        }
+      }
+
       executeToolOnTile(x, z);
     },
-    [executeToolOnTile, gameState.grid, gameState.selectedTool]
+    [executeToolOnTile, gameState]
   );
 
   const handleTileRightClick = useCallback(
@@ -608,7 +717,8 @@ export default function App() {
           prev.season,
           prev.activeConcertMonths,
           prev.treasury,
-          prev.crisisMonthsElapsed
+          prev.crisisMonthsElapsed,
+          prev.difficulty
         );
         return {
           ...prev,
@@ -693,7 +803,8 @@ export default function App() {
         season,
         prev.activeConcertMonths,
         prev.treasury,
-        prev.crisisMonthsElapsed
+        prev.crisisMonthsElapsed,
+        prev.difficulty
       );
       return {
         ...prev,
@@ -745,7 +856,9 @@ export default function App() {
 
       if (e.code === 'Escape') {
         e.preventDefault();
-        if (settlementModalOpen) {
+        if (pendingPlacementRisk) {
+          setPendingPlacementRisk(null);
+        } else if (settlementModalOpen) {
           handleCloseSettlementModal();
         } else if (howToPlayOpen) {
           setHowToPlayOpen(false);
@@ -798,14 +911,7 @@ export default function App() {
           return;
         }
         setRegionMapOpen((v) => !v);
-      } else if (e.code === 'KeyL') {
-        e.preventDefault();
-        if (settlementModalOpen) {
-          handleCloseSettlementModal();
-        } else {
-          handleOpenSettlementModal();
-        }
-      } else if (e.code === 'Slash' || e.code === 'KeyK') {
+      } else if (e.code === 'Slash') {
         e.preventDefault();
         setHowToPlayOpen((v) => !v);
       } else if (e.code === 'KeyM') {
@@ -908,9 +1014,21 @@ export default function App() {
   const activeClearanceInfo = activeTile
     ? calculateLandClearanceCost(
         activeTile,
-        gameState.policies.compensationLevel
+        gameState.policies.compensationLevel,
+        gameState.difficulty
       )
     : null;
+
+  const selectedToolFinancialPreview: BuildingFinancialPreview | null =
+    gameState.selectedTool !== 'inspect' &&
+    gameState.selectedTool !== 'act_clearance' &&
+    gameState.selectedTool !== 'sub_drainage'
+      ? getBuildingFinancialPreview(
+          gameState.selectedTool,
+          gameState.policies,
+          gameState.difficulty
+        )
+      : null;
 
   const filteredTools = TOOLS.filter((t) => t.category === dockCategory);
 
@@ -931,13 +1049,13 @@ export default function App() {
       id: 'road',
       iconId: 'cat_road',
       title: 'Giao Thông & Đường',
-      shortcut: '1-3',
+      shortcut: '1-3, K',
     },
     {
       id: 'zoning',
       iconId: 'cat_zoning',
       title: 'Phân Lô Dân Cư & KT',
-      shortcut: '4-0, F',
+      shortcut: '4-0, X, L, F',
     },
     {
       id: 'infra',
@@ -1002,6 +1120,87 @@ export default function App() {
           }`}
         >
           <span>⚠️ {budgetToast}</span>
+        </div>
+      )}
+
+      {/* Hộp thoại Xác Nhận Rủi Ro Trước Khi Đặt Công Trình (Pre-flight Check — evaluatePlacementRisk) */}
+      {gameState.mode === 'playing' && pendingPlacementRisk && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          data-testid="placement-risk-dialog"
+          onMouseMove={stopHudPropagation}
+          onMouseOver={stopHudPropagation}
+          onClick={stopHudPropagation}
+          onPointerDown={stopHudPropagation}
+          className="fixed inset-0 z-[1150] flex items-center justify-center bg-[#060c13]/75 p-4 pointer-events-auto"
+        >
+          <div className="w-full max-w-md rounded-2xl border-2 border-amber-400 bg-[#1a1608]/98 p-4 text-amber-100 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between border-b border-amber-500/40 pb-2">
+              <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
+                ⚠️ Cảnh Báo Rủi Ro Vận Hành Trước Khi Xây
+              </div>
+              <span className="font-mono text-[11px] font-bold text-amber-200">
+                Ô ({pendingPlacementRisk.x + 1},{pendingPlacementRisk.z + 1})
+              </span>
+            </div>
+
+            <p
+              data-testid="placement-risk-message"
+              className="text-xs text-amber-100 leading-relaxed font-medium"
+            >
+              {pendingPlacementRisk.risk.warningMessage}
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 text-[11px] bg-black/35 rounded-xl p-2.5 border border-amber-500/30">
+              <div>
+                <div className="text-amber-300/80 text-[10px]">Nhân sự thiếu hụt:</div>
+                <div
+                  data-testid="placement-risk-missing-workers"
+                  className="font-mono font-extrabold text-amber-200"
+                >
+                  {pendingPlacementRisk.risk.missingWorkersTotal > 0
+                    ? `Thiếu ${pendingPlacementRisk.risk.missingWorkersTotal} người`
+                    : 'Đủ nhân sự'}
+                </div>
+              </div>
+              <div>
+                <div className="text-amber-300/80 text-[10px]">Thâm hụt dự kiến/tháng:</div>
+                <div
+                  data-testid="placement-risk-deficit"
+                  className="font-mono font-extrabold text-rose-300"
+                >
+                  -{formatVnd(pendingPlacementRisk.risk.expectedMonthlyNetDeficit, true)}/tháng
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                data-testid="cancel-risky-build-btn"
+                onClick={() => {
+                  soundEngine.playClick();
+                  setPendingPlacementRisk(null);
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-bold text-slate-200 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-risky-build-btn"
+                onClick={() => {
+                  const target = pendingPlacementRisk;
+                  setPendingPlacementRisk(null);
+                  executeToolOnTile(target.x, target.z, target.toolId);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold cursor-pointer shadow-lg"
+              >
+                Vẫn Xây
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1860,6 +2059,17 @@ export default function App() {
                       ? formatVnd(tool.cost)
                       : 'Miễn phí';
 
+                  const toolFinancialPreview =
+                    tool.id !== 'inspect' &&
+                    tool.id !== 'act_clearance' &&
+                    tool.id !== 'sub_drainage'
+                      ? getBuildingFinancialPreview(
+                          tool.id,
+                          gameState.policies,
+                          gameState.difficulty
+                        )
+                      : undefined;
+
                   return (
                     <button
                       key={tool.id}
@@ -1874,6 +2084,9 @@ export default function App() {
                           meta: unlocked
                             ? `${displayCost} · ${tool.constructionDays}N`
                             : `🔒 ${lockRequirement}`,
+                          financialPreview: unlocked
+                            ? toolFinancialPreview
+                            : undefined,
                         })
                       }
                       onFocus={() =>
@@ -1883,6 +2096,9 @@ export default function App() {
                           meta: unlocked
                             ? `${displayCost} · ${tool.constructionDays}N`
                             : `🔒 ${lockRequirement}`,
+                          financialPreview: unlocked
+                            ? toolFinancialPreview
+                            : undefined,
                         })
                       }
                       onClick={(e) => {
@@ -2153,17 +2369,75 @@ export default function App() {
         onClose={() => setRegionMapOpen(false)}
       />
 
+      {/* Thanh Minh Bạch 5 Chỉ Số Tài Chính Công Trình (5-Metric Financial Preview Bar) nằm ngay trên Bottom Dock khi chọn hoặc rê chuột vào công trình */}
+      {gameState.mode === 'playing' &&
+        !dockCollapsed &&
+        !activePolicyDrawer &&
+        (hoveredDockTooltip?.financialPreview ?? selectedToolFinancialPreview) && (
+          <div
+            data-testid="build-financial-preview-bar"
+            className="fixed bottom-[62px] left-1/2 -translate-x-1/2 z-[1040] pointer-events-none rounded-xl border border-amber-400/60 bg-[#09131e]/96 px-3 py-1.5 shadow-2xl flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 text-[10px] font-mono whitespace-nowrap"
+          >
+            {(() => {
+              const fp =
+                hoveredDockTooltip?.financialPreview ??
+                selectedToolFinancialPreview!;
+              return (
+                <>
+                  <span>
+                    <strong className="text-slate-400 font-sans">1. Vốn:</strong>{' '}
+                    <span className="text-amber-300 font-bold">
+                      {fp.costLabel}
+                    </span>
+                  </span>
+                  <span className="text-slate-700">|</span>
+                  <span>
+                    <strong className="text-slate-400 font-sans">2. Upkeep:</strong>{' '}
+                    <span className="text-rose-300 font-bold">
+                      {fp.upkeepLabel}
+                    </span>
+                  </span>
+                  <span className="text-slate-700">|</span>
+                  <span>
+                    <strong className="text-slate-400 font-sans">3. Nhân sự:</strong>{' '}
+                    <span className="text-sky-300 font-bold">
+                      {fp.workersLabel}
+                    </span>
+                  </span>
+                  <span className="text-slate-700">|</span>
+                  <span>
+                    <strong className="text-slate-400 font-sans">4. Kỳ vọng:</strong>{' '}
+                    <span className="text-emerald-300 font-bold">
+                      {fp.expectedTaxOrOutputLabel}
+                    </span>
+                  </span>
+                  <span className="text-slate-700">|</span>
+                  <span>
+                    <strong className="text-slate-400 font-sans">5. Hoàn vốn:</strong>{' '}
+                    <span className="text-cyan-300 font-bold">
+                      {fp.paybackLabel}
+                    </span>
+                  </span>
+                </>
+              );
+            })()}
+          </div>
+        )}
+
       {/* Title, Pause & Outcome Modals */}
       <GameModals
         mode={gameState.mode}
         snapshot={gameState.snapshot}
         bestPci={gameState.bestPci}
         lastSavedAt={gameState.lastSavedAt}
+        difficulty={gameState.difficulty}
+        onSelectDifficulty={handleSelectDifficulty}
         onStartGame={handleStartGame}
         onOpenHowToPlay={() => setHowToPlayOpen(true)}
         onResumeGame={handleTogglePause}
         onRestartGame={handleRestartGame}
         onReturnTitle={handleReturnTitle}
+        onContinueEndless={handleContinueEndless}
       />
     </main>
   );

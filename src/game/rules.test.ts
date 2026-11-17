@@ -4,15 +4,20 @@ import {
   applyToolToTile,
   BUILDING_SPECS,
   calculateLandClearanceCost,
+  calculateLocalSupplyIndex,
   calculateMacroEconomy,
   canPlaceToolAtTile,
+  canRoadsConnect,
   computeCityLevel,
   computeTileEconomics,
+  continueEndlessAfterVictory,
   createInitialGameState,
   detectGhostCollision,
   DEFAULT_DAY_TICK_MS,
   evaluateOnboardingProgress,
+  evaluatePlacementRisk,
   generateCityAdvisorBriefing,
+  getBuildingFinancialPreview,
   getRoadConnections,
   getTileDetailedReport,
   GlobalLedger,
@@ -24,6 +29,7 @@ import {
   ONBOARDING_QUESTS,
   renameBuildingCustomName,
   runEndOfMonthSettlement,
+  selectOrUnlockRegion,
   setDayTickInterval,
   STARTING_TREASURY,
   stepSimulationDay,
@@ -1305,3 +1311,227 @@ test('19. Public Infrastructure Capacity (util_power_water), Admin Tax Leakage (
     settlement.totalMaintenanceCost
   );
 });
+
+test('20. Master Upgrade: 5-Metric Financial Preview, Pre-flight Risk Check, 3 Difficulties, Road Ring Snapping, Non-Stacking Local Supply, com_office/ind_food/Pollution, Traffic Policies, and Multi-Region Victory + Endless', () => {
+  // 1. 3 Difficulty Levels (easy = 80B & 0.8x upkeep, hard = 50B, expert = 32B & 1.3x clearance & 2-month crisis timer)
+  const easyState = createInitialGameState(true, 'easy');
+  const hardState = createInitialGameState(true, 'hard');
+  const expertState = createInitialGameState(true, 'expert');
+
+  assert.equal(easyState.treasury, 80);
+  assert.equal(hardState.treasury, 50);
+  assert.equal(expertState.treasury, 32);
+
+  // 2. 5-Metric Financial Preview (getBuildingFinancialPreview)
+  const officePreviewHard = getBuildingFinancialPreview(
+    'com_office',
+    hardState.policies,
+    'hard'
+  );
+  const officePreviewEasy = getBuildingFinancialPreview(
+    'com_office',
+    easyState.policies,
+    'easy'
+  );
+  assert.equal(officePreviewHard.costBillion, 18);
+  assert.equal(officePreviewHard.upkeepBillion, 0.3);
+  assert.equal(officePreviewEasy.upkeepBillion, 0.24); // -20% on easy
+  assert.ok(officePreviewHard.workersLabel.includes('40 người'));
+  assert.ok(officePreviewHard.expectedTaxOrOutputLabel.includes('SL'));
+  assert.ok(officePreviewHard.paybackMonths && officePreviewHard.paybackMonths > 0);
+
+  const pubAdminPreview = getBuildingFinancialPreview(
+    'pub_admin',
+    hardState.policies,
+    'hard'
+  );
+  assert.equal(pubAdminPreview.paybackLabel, 'Chi đầu tư công');
+
+  // 3. Pre-flight Risk Check (evaluatePlacementRisk)
+  let state = createInitialGameState(true, 'hard');
+  state.treasury = 300;
+  state = applyToolToTile(state, 5, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 6, 5, 'util_power_water').nextState;
+  state.grid[5][6].constructionRemainingDays = 0;
+
+  // Placing com_office at (5, 4) when city has 0 educated workers triggers worker shortage & upkeep risk warning
+  const riskEval = evaluatePlacementRisk(state, 'com_office', 5, 4);
+  assert.equal(riskEval.hasRisk, true);
+  assert.equal(riskEval.missingWorkersTotal, 40);
+  assert.ok(riskEval.warningMessage && riskEval.warningMessage.includes('Thiếu'));
+
+  // 4. Road Ring (road_ring) Snapping: connects with road_urban/road_highway/road_ring, NEVER connects with road_alley
+  assert.equal(canRoadsConnect('road_ring', 'road_urban'), true);
+  assert.equal(canRoadsConnect('road_ring', 'road_highway'), true);
+  assert.equal(canRoadsConnect('road_ring', 'road_ring'), true);
+  assert.equal(canRoadsConnect('road_ring', 'road_alley'), false);
+  assert.equal(canRoadsConnect('road_alley', 'road_ring'), false);
+
+  state = applyToolToTile(state, 10, 5, 'road_ring').nextState;
+  state = applyToolToTile(state, 10, 4, 'road_alley').nextState;
+  state = applyToolToTile(state, 11, 5, 'road_urban').nextState;
+  const ringConn = getRoadConnections(state.grid, 10, 5);
+  assert.equal(ringConn.north, false); // North is road_alley -> blocked!
+  assert.equal(ringConn.east, true); // East is road_urban -> connected!
+
+  // 5. Non-stacking Local Supply Index (Math.max per category within 5 tiles)
+  state = applyToolToTile(state, 5, 4, 'ind_food').nextState;
+  state = applyToolToTile(state, 4, 4, 'agr_farm').nextState;
+  state.grid[4][4].constructionRemainingDays = 0;
+  const supplyWith1Farm = calculateLocalSupplyIndex(
+    state.grid,
+    5,
+    4,
+    'ind_food'
+  );
+
+  // Add 2 more identical agr_farm tiles nearby: localSupplyIndex MUST NOT stack!
+  state = applyToolToTile(state, 3, 4, 'agr_farm').nextState;
+  state = applyToolToTile(state, 4, 3, 'agr_farm').nextState;
+  state.grid[4][3].constructionRemainingDays = 0;
+  state.grid[3][4].constructionRemainingDays = 0;
+  const supplyWith3Farms = calculateLocalSupplyIndex(
+    state.grid,
+    5,
+    4,
+    'ind_food'
+  );
+  assert.equal(supplyWith3Farms, supplyWith1Farm);
+  assert.ok(supplyWith1Farm >= 55);
+
+  // 6. ind_factory Pollution (-4 Happiness per residential tile within radius 2) & agr_farm Food Supply (180 pop/farm)
+  state = applyToolToTile(state, 5, 6, 'res_mid').nextState;
+  state.grid[6][5].constructionRemainingDays = 0;
+  state.grid[6][5].currentOccupants = 100;
+  state.grid[6][5].occupantsByTier = {
+    unskilled: 40,
+    skilled: 40,
+    educated: 20,
+  };
+  const metricsBeforeFactory = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+  assert.equal(metricsBeforeFactory.pollutionPenaltyHappiness, 0);
+
+  // Place ind_factory at (4, 5) adjacent to road (5, 5) and within 2 tiles of res_mid at (5, 6)
+  const factoryBuild = applyToolToTile(state, 4, 5, 'ind_factory');
+  assert.equal(factoryBuild.success, true);
+  state = factoryBuild.nextState;
+  state.grid[5][4].constructionRemainingDays = 0;
+  const metricsAfterFactory = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+  assert.equal(metricsAfterFactory.pollutionPenaltyHappiness, 4);
+
+  // 7. Traffic Policies (transitLevel, enableTollbooth, sidewalkPolicy, banTrucksInResidential)
+  state.grid[5][5].constructionRemainingDays = 0;
+  state.grid[5][10].constructionRemainingDays = 0;
+  state.grid[5][11].constructionRemainingDays = 0;
+  const policiesWithTransitAndToll = {
+    ...state.policies,
+    transitLevel: 2 as const,
+    enableTollbooth: true,
+    sidewalkPolicy: 'licensed' as const,
+    banTrucksInResidential: true,
+  };
+  const metricsTransit = calculateMacroEconomy(
+    state.grid,
+    policiesWithTransitAndToll,
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+  assert.ok((metricsTransit.tollboothRevenue ?? 0) > 0);
+  assert.equal(metricsTransit.transitUpkeep, 0.4);
+  assert.ok((metricsTransit.sidewalkLicenseRevenue ?? 0) > 0);
+  assert.ok(
+    metricsTransit.trafficSpeedIndex > metricsAfterFactory.trafficSpeedIndex
+  );
+
+  // 8. Chronic Low-Efficiency Warning (lowEfficiencyMonths >= 2 when <50% efficiency)
+  // com_market at (7, 4) with 0 workers has <50% efficiency
+  state = applyToolToTile(state, 7, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 7, 4, 'com_market').nextState;
+  state.grid[4][7].constructionRemainingDays = 0;
+  // Remove residents so com_market has 0 workers
+  state.grid[6][5].currentOccupants = 0;
+  state.grid[6][5].occupantsByTier = { unskilled: 0, skilled: 0, educated: 0 };
+  state = stepSimulationMonth(state);
+  assert.equal(state.grid[4][7].lowEfficiencyMonths, 1);
+  state = stepSimulationMonth(state);
+  assert.ok((state.grid[4][7].lowEfficiencyMonths ?? 0) >= 2);
+  const briefingWithLowEff = generateCityAdvisorBriefing(state);
+  assert.ok(
+    briefingWithLowEff.diagnostics.some((d) =>
+      d.includes('Cảnh báo Hiệu suất thấp (<50% từ 2 tháng liên tiếp)')
+    )
+  );
+
+  // 9. Multi-Region Victory (Total Pop >= 1200, PCI >= 75, unlockedRegions.length >= 2) & Endless Mode
+  let vicState = createInitialGameState(true, 'easy');
+  vicState.treasury = 500;
+  vicState = applyToolToTile(vicState, 5, 5, 'road_urban').nextState;
+  vicState = applyToolToTile(vicState, 6, 5, 'road_urban').nextState;
+  vicState = applyToolToTile(vicState, 7, 5, 'road_urban').nextState;
+  vicState = applyToolToTile(vicState, 5, 4, 'res_high').nextState;
+  vicState = applyToolToTile(vicState, 6, 4, 'res_high').nextState;
+  vicState = applyToolToTile(vicState, 7, 4, 'res_high').nextState;
+  vicState = applyToolToTile(vicState, 5, 6, 'pub_admin').nextState;
+  vicState = applyToolToTile(vicState, 6, 6, 'util_power_water').nextState;
+  for (let x = 5; x <= 7; x++) {
+    vicState.grid[5][x].constructionRemainingDays = 0;
+    vicState.grid[5][x].hasDrainage = true;
+    vicState.grid[4][x].constructionRemainingDays = 0;
+    vicState.grid[4][x].hasDrainage = true;
+    vicState.grid[4][x].currentOccupants = 450;
+    vicState.grid[4][x].occupantsByTier = {
+      unskilled: 0,
+      skilled: 200,
+      educated: 250,
+    };
+  }
+  vicState.grid[6][5].constructionRemainingDays = 0;
+  vicState.grid[6][5].hasDrainage = true;
+  vicState.grid[6][6].constructionRemainingDays = 0;
+  vicState.grid[6][6].hasDrainage = true;
+  vicState.policies.citFdi = 5;
+  vicState.policies.transitLevel = 2;
+  vicState.metrics = calculateMacroEconomy(
+    vicState.grid,
+    vicState.policies,
+    vicState.season,
+    1,
+    vicState.treasury,
+    0,
+    vicState.difficulty
+  );
+  assert.ok(vicState.metrics.population >= 1200);
+  assert.ok(vicState.metrics.pci >= 75);
+
+  // Unlock 2nd region -> triggers Victory!
+  const unlockRes = selectOrUnlockRegion(vicState, 4, 5);
+  assert.equal(unlockRes.nextState.unlockedRegions.length, 2);
+  assert.equal(unlockRes.nextState.mode, 'gameover');
+  assert.equal(unlockRes.nextState.snapshot?.outcome, 'victory');
+
+  // Click "Tiếp Tục Chơi Endless" -> resumes playing with endlessMode = true
+  const endlessState = continueEndlessAfterVictory(unlockRes.nextState);
+  assert.equal(endlessState.mode, 'playing');
+  assert.equal(endlessState.endlessMode, true);
+  assert.equal(endlessState.snapshot, null);
+});
+

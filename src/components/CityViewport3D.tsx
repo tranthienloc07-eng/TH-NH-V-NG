@@ -7,6 +7,7 @@ import {
   buildTileStructureGroup,
   createVehicleMesh,
   disposeGroupGeometries,
+  disposeGroupResources,
   getMicroBumpTexture,
   TILE_WORLD_SIZE,
   updateRoadSnapPreviewGroup,
@@ -96,7 +97,12 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     if (sceneRebuildRef.current) {
       sceneRebuildRef.current(gameState.grid, gameState.season);
     }
-  }, [gameState.grid, gameState.season]);
+  }, [
+    gameState.grid,
+    gameState.season,
+    gameState.policies.transitLevel,
+    gameState.policies.banTrucksInResidential,
+  ]);
 
   useEffect(() => {
     if (syncToolGhostRef.current) {
@@ -535,7 +541,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       if (previewMesh) {
         previewMesh.visible = false;
         scene.remove(previewMesh);
-        disposeGroupGeometries(previewMesh);
+        disposeGroupResources(previewMesh);
         previewMesh = null;
       }
       previewToolId = null;
@@ -753,7 +759,8 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
         const roadConn = getRoadConnections(
           stateRef.current.grid,
           hit.x,
-          hit.z
+          hit.z,
+          tool as TileType
         );
         const ghost = ensureGhostPreviewMesh(
           tool as TileType,
@@ -865,12 +872,15 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
 
     /**
      * Tự động sinh phương tiện bám theo quỹ đạo cong (Bezier / CatmullRom Spline)
-     * của từng làn đường — Chỉ gọi khi cấu trúc mạng lưới đường (`road_*`) thay đổi,
+     * của từng làn đường — Chỉ gọi khi cấu trúc mạng lưới đường (`road_*`) hoặc chính sách giao thông thay đổi,
      * tuyệt đối KHÔNG gọi lại mỗi ngày để tránh xe bị reset nhảy cóc.
      */
     let lastRoadNetworkSignature = '';
     const computeRoadNetworkSignature = (grid: TileData[][]): string => {
-      const parts: string[] = [];
+      const pol = stateRef.current.policies;
+      const parts: string[] = [
+        `tr:${pol.transitLevel ?? 0}|bt:${pol.banTrucksInResidential ? 1 : 0}`,
+      ];
       for (let z = 0; z < GRID_SIZE; z++) {
         for (let x = 0; x < GRID_SIZE; x++) {
           const t = grid[z][x];
@@ -889,13 +899,17 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     const rebuildVehiclesFromRoads = (grid: TileData[][]) => {
       while (vehicleGroup.children.length > 0) {
         const child = vehicleGroup.children[0];
-        disposeGroupGeometries(child);
+        disposeGroupResources(child);
         vehicleGroup.remove(child);
       }
       vehicles = [];
       nodeOccupancyMap.clear();
 
-      const routes = generateVehicleRoutesFromGrid(grid);
+      const pol = stateRef.current.policies;
+      const routes = generateVehicleRoutesFromGrid(grid, {
+        banTrucksInResidential: pol.banTrucksInResidential,
+        transitLevel: pol.transitLevel,
+      });
       for (const route of routes) {
         const vehicleCountOnRoute = route.totalLength >= 28 ? 2 : 1;
         for (let vIdx = 0; vIdx < vehicleCountOnRoute; vIdx++) {
@@ -1003,8 +1017,8 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
 
           const prevStruct = tileStructGroupMap.get(tileKey);
           if (prevStruct) {
+            disposeGroupResources(prevStruct);
             structuresGroup.remove(prevStruct);
-            disposeGroupGeometries(prevStruct);
             tileStructGroupMap.delete(tileKey);
           }
 
@@ -1028,7 +1042,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       }
       container.dataset.lastDirtyTileCount = String(dirtyTileCount);
 
-      // Chỉ tái tạo mạng lưới xe cộ khi người chơi xây mới hoặc giải tỏa ô đường (road_*)
+      // Chỉ tái tạo mạng lưới xe cộ khi người chơi xây mới hoặc giải tỏa ô đường (road_*) hoặc đổi chính sách giao thông
       const nextRoadSig = computeRoadNetworkSignature(grid);
       if (nextRoadSig !== lastRoadNetworkSignature) {
         lastRoadNetworkSignature = nextRoadSig;
@@ -1186,7 +1200,8 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
           const snapInfo = detectRoadProximitySnap(
             stateRef.current.grid,
             hit.x,
-            hit.z
+            hit.z,
+            tool as TileType
           );
           updateRoadSnapPreviewGroup(
             roadSnapPreviewGroup,

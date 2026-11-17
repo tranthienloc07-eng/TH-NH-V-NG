@@ -1,38 +1,45 @@
 import React from 'react';
-import { GameStateMode, RunSnapshot } from '../game/types';
+import { DIFFICULTY_SPECS } from '../game/rules';
+import { DifficultyLevel, GameStateMode, RunSnapshot } from '../game/types';
 
 interface GameModalsProps {
   mode: GameStateMode;
+  difficulty?: DifficultyLevel;
   snapshot: RunSnapshot | null;
   bestPci: number;
   lastSavedAt?: string | null;
+  onSelectDifficulty?: (difficulty: DifficultyLevel) => void;
   onStartGame: () => void;
   onOpenHowToPlay: () => void;
   onResumeGame: () => void;
   onRestartGame: () => void;
   onReturnTitle: () => void;
+  onContinueEndless?: () => void;
 }
 
 export const GameModals: React.FC<GameModalsProps> = ({
   mode,
+  difficulty = 'hard',
   snapshot,
   bestPci,
   lastSavedAt,
+  onSelectDifficulty,
   onStartGame,
   onOpenHowToPlay,
   onResumeGame,
   onRestartGame,
   onReturnTitle,
+  onContinueEndless,
 }) => {
   if (mode === 'playing') return null;
 
   if (mode === 'title') {
     return (
       <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-8 md:p-14 bg-gradient-to-r from-[#070e17]/95 via-[#070e17]/65 to-transparent">
-        <div className="pointer-events-auto max-w-lg mt-6 md:mt-12">
+        <div className="pointer-events-auto max-w-xl mt-4 md:mt-8">
           <svg
             viewBox="0 0 480 138"
-            className="w-full max-w-[460px] h-auto mb-5 drop-shadow-xl"
+            className="w-full max-w-[460px] h-auto mb-4 drop-shadow-xl"
             role="img"
             aria-label="Thịnh Vượng — Quy Hoạch Đại Đô Thị Việt Nam"
           >
@@ -102,7 +109,48 @@ export const GameModals: React.FC<GameModalsProps> = ({
             </text>
           </svg>
 
-          <div className="flex flex-wrap items-center gap-3 mt-4">
+          {/* Bộ chọn 3 Độ khó trên màn hình chính */}
+          <div
+            data-testid="title-difficulty-selector"
+            className="mb-4 rounded-xl bg-[#0e1a27]/90 border border-slate-700/80 p-3 shadow-lg"
+          >
+            <div className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-2">
+              Chọn Cấp Độ Thử Thách Điều Hành:
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {(['easy', 'hard', 'expert'] as DifficultyLevel[]).map((lvl) => {
+                const spec = DIFFICULTY_SPECS[lvl];
+                const isSelected = difficulty === lvl;
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    data-testid={`difficulty-btn-${lvl}`}
+                    onClick={() => onSelectDifficulty?.(lvl)}
+                    className={`text-left rounded-lg p-2.5 border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-amber-400/20 border-amber-400 text-amber-200 shadow-md'
+                        : 'bg-[#142334]/80 border-slate-700 text-slate-300 hover:bg-[#192c40]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold">
+                        {spec.label}
+                      </span>
+                      <span className="font-mono text-[11px] font-bold text-emerald-300">
+                        {spec.startingTreasury} Tỷ
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-300/90 mt-1 leading-snug">
+                      {spec.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 mt-3">
             <button
               type="button"
               data-start="true"
@@ -260,7 +308,20 @@ export const GameModals: React.FC<GameModalsProps> = ({
           </div>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          {isVictory && onContinueEndless && (
+            <button
+              type="button"
+              data-testid="btn-continue-endless"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onContinueEndless();
+              }}
+              className="w-full py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-sm cursor-pointer shadow-lg"
+            >
+              Tiếp Tục Chơi Endless (Mở Rộng 81 Vùng Đô Thị)
+            </button>
+          )}
           <button
             type="button"
             data-start="true"

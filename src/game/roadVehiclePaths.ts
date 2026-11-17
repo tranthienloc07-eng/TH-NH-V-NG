@@ -1,5 +1,34 @@
-import { isRoadTile } from './rules';
-import { TileData } from './types';
+import { canRoadsConnect, isResidentialTile, isRoadTile } from './rules';
+import { TileData, TransitLevel } from './types';
+
+export interface VehicleRoutingOptions {
+  banTrucksInResidential?: boolean;
+  transitLevel?: TransitLevel;
+  vehicleKind?: 'motorbike' | 'bus' | 'truck';
+}
+
+export function isRoadRestrictedForTruck(
+  grid: TileData[][],
+  x: number,
+  z: number
+): boolean {
+  const tile = grid[z]?.[x];
+  if (!tile || !isRoadTile(tile.type)) return true;
+  if (tile.type === 'road_alley') return true;
+  const dirs = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  for (const [dx, dz] of dirs) {
+    const nb = grid[z + dz]?.[x + dx];
+    if (nb && isResidentialTile(nb.type)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export const ROAD_TILE_WORLD_SIZE = 3.2;
 export const ROAD_GRID_SIZE = 18;
@@ -220,6 +249,9 @@ function getConnectedRoadNeighbors(
   z: number
 ): { dir: DirVec2; nx: number; nz: number; tile: TileData }[] {
   const res: { dir: DirVec2; nx: number; nz: number; tile: TileData }[] = [];
+  const centerType = grid[z]?.[x]?.type;
+  if (!centerType || !isRoadTile(centerType)) return res;
+
   for (const dir of CARDINAL_DIRS) {
     const nx = x + dir.dx;
     const nz = z + dir.dz;
@@ -228,7 +260,7 @@ function getConnectedRoadNeighbors(
       nz < grid.length &&
       nx >= 0 &&
       nx < grid[0].length &&
-      isRoadTile(grid[nz][nx].type)
+      canRoadsConnect(centerType, grid[nz][nx].type)
     ) {
       res.push({ dir, nx, nz, tile: grid[nz][nx] });
     }
@@ -339,6 +371,7 @@ export function isNodeOccupiedByOther(
 
 function getRoadTileStepCost(tile: TileData): number {
   if (tile.type === 'road_highway') return 0.88;
+  if (tile.type === 'road_ring') return 0.91;
   if (tile.type === 'road_urban') return 0.96;
   return 1.08;
 }
@@ -352,7 +385,8 @@ export function findAStarRoadPath(
   grid: TileData[][],
   start: RoadNodeCoord,
   goal: RoadNodeCoord,
-  blockedNodes: Set<string> = new Set()
+  blockedNodes: Set<string> = new Set(),
+  options?: VehicleRoutingOptions
 ): RoadNodeCoord[] | null {
   if (
     start.z < 0 ||
@@ -370,6 +404,18 @@ export function findAStarRoadPath(
   if (
     !isRoadTile(grid[start.z][start.x].type) ||
     !isRoadTile(grid[goal.z][goal.x].type)
+  ) {
+    return null;
+  }
+
+  const avoidTruckRes =
+    Boolean(options?.banTrucksInResidential) &&
+    options?.vehicleKind === 'truck';
+
+  if (
+    avoidTruckRes &&
+    (isRoadRestrictedForTruck(grid, start.x, start.z) ||
+      isRoadRestrictedForTruck(grid, goal.x, goal.z))
   ) {
     return null;
   }
@@ -431,6 +477,9 @@ export function findAStarRoadPath(
     for (const nb of neighbors) {
       const nbKey = nodeKey(nb.nx, nb.nz);
       if (blockedNodes.has(nbKey) && nbKey !== startK) continue;
+      if (avoidTruckRes && isRoadRestrictedForTruck(grid, nb.nx, nb.nz)) {
+        continue;
+      }
 
       const stepCost = getRoadTileStepCost(nb.tile);
       const turnPenalty =
@@ -595,10 +644,13 @@ export function buildSplineRouteFromTilePath(
  * bám sát làn đường bên phải qua cả đoạn thẳng, góc cua chữ L, Ngã Ba (T-junction) và Ngã Tư (Crossroad).
  */
 export function generateVehicleRoutesFromGrid(
-  grid: TileData[][]
+  grid: TileData[][],
+  options?: VehicleRoutingOptions
 ): VehicleSplineRoute[] {
   const visitedTiles = new Set<string>();
   const routes: VehicleSplineRoute[] = [];
+  const transitLevel = options?.transitLevel ?? 0;
+  const banTrucksInResidential = Boolean(options?.banTrucksInResidential);
 
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
@@ -651,7 +703,9 @@ export function generateVehicleRoutesFromGrid(
           ? cornersOrJunctions
           : component;
 
-      const hasHighway = component.some((t) => t.type === 'road_highway');
+      const hasHighwayOrRing = component.some(
+        (t) => t.type === 'road_highway' || t.type === 'road_ring'
+      );
       const maxRoutesForComponent =
         component.length >= 10 ? 3 : component.length >= 5 ? 2 : 1;
 
@@ -659,6 +713,21 @@ export function generateVehicleRoutesFromGrid(
       const primaryInteriorPenalty = new Set<string>();
 
       for (let rIdx = 0; rIdx < maxRoutesForComponent; rIdx++) {
+        // Xác định loại xe ưu tiên theo chính sách transitLevel và banTrucksInResidential
+        let desiredKind: 'motorbike' | 'bus' | 'truck' = hasHighwayOrRing
+          ? rIdx === 0
+            ? 'truck'
+            : 'bus'
+          : transitLevel >= 2
+          ? 'bus'
+          : transitLevel === 1
+          ? rIdx === 0 || component.length >= 4
+            ? 'bus'
+            : 'motorbike'
+          : component.length >= 5 && rIdx === 1
+          ? 'bus'
+          : 'motorbike';
+
         const startAnchor =
           candidateAnchors[rIdx % candidateAnchors.length] ?? component[0];
 
@@ -666,72 +735,99 @@ export function generateVehicleRoutesFromGrid(
         let bestPath: RoadNodeCoord[] | null = null;
         let bestScore = -1;
 
-        for (const goalCandidate of component) {
-          if (
-            goalCandidate.x === startAnchor.x &&
-            goalCandidate.z === startAnchor.z
-          ) {
-            continue;
-          }
-          const pairK1 = `${startAnchor.x},${startAnchor.z}->${goalCandidate.x},${goalCandidate.z}`;
-          const pairK2 = `${goalCandidate.x},${goalCandidate.z}->${startAnchor.x},${startAnchor.z}`;
-          if (usedPairKeys.has(pairK1) || usedPairKeys.has(pairK2)) continue;
+        const searchPathWithKind = (
+          vehKind: 'motorbike' | 'bus' | 'truck'
+        ): RoadNodeCoord[] | null => {
+          let chosenPath: RoadNodeCoord[] | null = null;
+          let chosenScore = -1;
 
-          // Với tuyến thứ 2 trở đi, thử tìm nhánh đường thay thế trước (nếu có) để phủ đều các nhánh Ngã Ba / Ngã Tư
-          let path =
-            rIdx > 0 && primaryInteriorPenalty.size > 0
-              ? findAStarRoadPath(
-                  grid,
-                  { x: startAnchor.x, z: startAnchor.z },
-                  { x: goalCandidate.x, z: goalCandidate.z },
-                  primaryInteriorPenalty
+          const startCandidates =
+            banTrucksInResidential && vehKind === 'truck'
+              ? component.filter(
+                  (t) => !isRoadRestrictedForTruck(grid, t.x, t.z)
                 )
-              : null;
+              : [startAnchor];
 
-          if (!path) {
-            path = findAStarRoadPath(
-              grid,
-              { x: startAnchor.x, z: startAnchor.z },
-              { x: goalCandidate.x, z: goalCandidate.z }
-            );
-          }
+          const effectiveStart = startCandidates[0];
+          if (!effectiveStart) return null;
 
-          if (path && path.length >= 2) {
-            const isEndpointGoal = endpoints.some(
-              (e) => e.x === goalCandidate.x && e.z === goalCandidate.z
-            );
-            const score = path.length + (isEndpointGoal ? 1.5 : 0);
-            if (score > bestScore) {
-              bestScore = score;
-              bestPath = path;
+          for (const goalCandidate of component) {
+            if (
+              goalCandidate.x === effectiveStart.x &&
+              goalCandidate.z === effectiveStart.z
+            ) {
+              continue;
+            }
+            const pairK1 = `${effectiveStart.x},${effectiveStart.z}->${goalCandidate.x},${goalCandidate.z}`;
+            const pairK2 = `${goalCandidate.x},${goalCandidate.z}->${effectiveStart.x},${effectiveStart.z}`;
+            if (usedPairKeys.has(pairK1) || usedPairKeys.has(pairK2)) continue;
+
+            const routeOpts: VehicleRoutingOptions = {
+              banTrucksInResidential,
+              transitLevel,
+              vehicleKind: vehKind,
+            };
+
+            let path =
+              rIdx > 0 && primaryInteriorPenalty.size > 0
+                ? findAStarRoadPath(
+                    grid,
+                    { x: effectiveStart.x, z: effectiveStart.z },
+                    { x: goalCandidate.x, z: goalCandidate.z },
+                    primaryInteriorPenalty,
+                    routeOpts
+                  )
+                : null;
+
+            if (!path) {
+              path = findAStarRoadPath(
+                grid,
+                { x: effectiveStart.x, z: effectiveStart.z },
+                { x: goalCandidate.x, z: goalCandidate.z },
+                new Set(),
+                routeOpts
+              );
+            }
+
+            if (path && path.length >= 2) {
+              const isEndpointGoal = endpoints.some(
+                (e) => e.x === goalCandidate.x && e.z === goalCandidate.z
+              );
+              const score = path.length + (isEndpointGoal ? 1.5 : 0);
+              if (score > chosenScore) {
+                chosenScore = score;
+                chosenPath = path;
+              }
             }
           }
+          bestScore = chosenScore;
+          return chosenPath;
+        };
+
+        bestPath = searchPathWithKind(desiredKind);
+        if (!bestPath && desiredKind === 'truck' && banTrucksInResidential) {
+          // Nếu cấm xe tải vào khu dân cư mà toàn bộ nhánh đường đều kề khu dân cư -> chuyển sang xe buýt
+          desiredKind = 'bus';
+          bestPath = searchPathWithKind('bus');
         }
 
-        if (!bestPath || bestPath.length < 2) continue;
+        if (!bestPath || bestPath.length < 2 || bestScore < 0) continue;
 
+        const actualStart = bestPath[0];
         const goalNode = bestPath[bestPath.length - 1];
         usedPairKeys.add(
-          `${startAnchor.x},${startAnchor.z}->${goalNode.x},${goalNode.z}`
+          `${actualStart.x},${actualStart.z}->${goalNode.x},${goalNode.z}`
         );
 
-        // Đánh dấu1 ô giữa của tuyến đầu tiên để tuyến thứ 2 ưu tiên rẽ qua nhánh khác nếu mạng lưới có vòng lặp
+        // Đánh dấu 1 ô giữa của tuyến đầu tiên để tuyến thứ 2 ưu tiên rẽ qua nhánh khác nếu mạng lưới có vòng lặp
         if (rIdx === 0 && bestPath.length >= 4) {
           const midNode = bestPath[Math.floor(bestPath.length / 2)];
           primaryInteriorPenalty.add(nodeKey(midNode.x, midNode.z));
         }
 
-        const kind: 'motorbike' | 'bus' | 'truck' = hasHighway
-          ? rIdx === 0
-            ? 'truck'
-            : 'bus'
-          : component.length >= 5 && rIdx === 1
-          ? 'bus'
-          : 'motorbike';
-
         const route = buildSplineRouteFromTilePath(
-          `route_${startAnchor.x}_${startAnchor.z}_${rIdx}`,
-          kind,
+          `route_${actualStart.x}_${actualStart.z}_${rIdx}`,
+          desiredKind,
           grid,
           bestPath
         );

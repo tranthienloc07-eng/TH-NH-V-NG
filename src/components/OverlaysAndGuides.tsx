@@ -48,7 +48,12 @@ export const BuildingHoverTooltip: React.FC<{
   const isPlacingRoad =
     !built && selectedTool && isRoadTile(selectedTool as TileType);
   const roadSnap = isPlacingRoad
-    ? detectRoadProximitySnap(grid, hoverInfo.x, hoverInfo.z)
+    ? detectRoadProximitySnap(
+        grid,
+        hoverInfo.x,
+        hoverInfo.z,
+        selectedTool as TileType
+      )
     : null;
   const collisionInfo = selectedTool
     ? detectGhostCollision(grid, hoverInfo.x, hoverInfo.z, selectedTool)
@@ -182,11 +187,14 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
     gameState.policies,
     gameState.metrics,
     gameState.month,
-    gameState.year
+    gameState.year,
+    gameState.activeConcertMonths,
+    gameState.difficulty
   );
   const clearance = calculateLandClearanceCost(
     tile,
-    gameState.policies.compensationLevel
+    gameState.policies.compensationLevel,
+    gameState.difficulty
   );
 
   const stopMenuEvent = (e: React.SyntheticEvent) => {
@@ -522,7 +530,7 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
                     2. Thuế &amp; Hiệu Suất CIT
                   </span>
                   <span className="font-mono text-[10px] font-bold text-emerald-300">
-                    Hiệu suất {report.economicEfficiencyPercent}%
+                    Hiệu suất {report.economicEfficiencyPercent}% · Cung {tile.localSupplyIndex ?? 0}%
                   </span>
                 </div>
 
@@ -953,7 +961,9 @@ export const MonthlySettlementModal: React.FC<{
       gameState.year,
       gameState.season,
       gameState.treasury,
-      0
+      0,
+      gameState.activeConcertMonths,
+      gameState.difficulty
     );
 
   const ledgerHistory = [...(gameState.globalLedger ?? [])].reverse();

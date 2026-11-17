@@ -1,15 +1,18 @@
 import {
   BUILDING_SPECS,
   calculatePrivateServiceIncomeSuitability,
+  canRoadsConnect,
   classifyRoadJunction,
   EXPANSION_POP_TARGET,
   EXPANSION_TREASURY_TARGET,
   formatVnd,
   generateDefaultBuildingIdentity,
+  getDifficultySpec,
   GRID_SIZE,
   hasNeighborOfType,
   isBuiltStructure,
-  isConnectableRoadOrGateway,
+  isEconomicCitModule,
+  isMainArterialRoad,
   isPrivateServiceModule,
   isPublicServiceModule,
   isResidentialTile,
@@ -20,6 +23,7 @@ import {
 } from './constants';
 import {
   CityGameState,
+  DifficultyLevel,
   EntityLedgerRecord,
   LaborTierCounts,
   LedgerEntry,
@@ -27,19 +31,26 @@ import {
   MacroPolicies,
   MonthlyCitEntry,
   SeasonType,
+  SidewalkPolicy,
   TileData,
   TileDetailedReport,
+  TileType,
+  TransitLevel,
 } from './types';
 
 // Hệ thống Sổ cái Toàn cục (GlobalLedger) ghi lại lịch sử dòng tiền của từng ngày/tháng
 export const GlobalLedger: LedgerEntry[] = [];
 
 function getLocalRoadJunctionType(grid: TileData[][], x: number, z: number) {
+  const selfType =
+    z >= 0 && z < grid.length && x >= 0 && x < grid[0].length
+      ? grid[z][x].type
+      : 'road_urban';
   const check = (nx: number, nz: number): boolean => {
     if (nz < 0 || nz >= grid.length || nx < 0 || nx >= grid[0].length) {
       return false;
     }
-    return isConnectableRoadOrGateway(grid[nz][nx].type);
+    return canRoadsConnect(selfType, grid[nz][nx].type);
   };
   return classifyRoadJunction(
     check(x, z - 1),
@@ -50,10 +61,131 @@ function getLocalRoadJunctionType(grid: TileData[][], x: number, z: number) {
 }
 
 /**
+ * Tính chỉ số Cung ứng Cục bộ (`localSupplyIndex`: 0 - 100%) trong bán kính 5 ô
+ * tới nguồn cung và đường trục (`road_ring`, `road_highway`), dùng `Math.max` theo từng nhóm
+ * (KHÔNG cộng dồn khi đặt nhiều công trình cùng loại cạnh nhau).
+ */
+export function calculateLocalSupplyIndex(
+  grid: TileData[][],
+  x: number,
+  z: number,
+  tileType: TileType
+): number {
+  const connectedToRoad = hasNeighborOfType(grid, x, z, [
+    'road_alley',
+    'road_urban',
+    'road_ring',
+    'road_highway',
+  ]);
+  const baseScore = connectedToRoad ? 65 : 45;
+
+  let maxArterialBonus = 0;
+  let maxGatewayBonus = 0;
+  let maxAgriBonus = 0;
+  let maxIndustrialSupplyBonus = 0;
+
+  for (let rz = Math.max(0, z - 5); rz <= Math.min(grid.length - 1, z + 5); rz++) {
+    for (
+      let rx = Math.max(0, x - 5);
+      rx <= Math.min(grid[rz].length - 1, x + 5);
+      rx++
+    ) {
+      const dist = Math.abs(rx - x) + Math.abs(rz - z);
+      if (dist > 5) continue;
+
+      const neighbor = grid[rz][rx];
+      if (neighbor.constructionRemainingDays > 0 || neighbor.isFlooded) {
+        continue;
+      }
+
+      // Nhóm 1: Đường trục vận tải (Vành đai / Cao tốc / Đường đô thị) - dùng Math.max không cộng dồn
+      if (neighbor.type === 'road_highway') {
+        maxArterialBonus = Math.max(maxArterialBonus, 18);
+      } else if (neighbor.type === 'road_ring') {
+        maxArterialBonus = Math.max(maxArterialBonus, 15);
+      } else if (neighbor.type === 'road_urban') {
+        maxArterialBonus = Math.max(maxArterialBonus, 6);
+      }
+
+      // Nhóm 2: Cửa ngõ Cảng / Ga liên vùng - dùng Math.max
+      if (
+        neighbor.type === 'gateway_port' ||
+        neighbor.type === 'gateway_station'
+      ) {
+        maxGatewayBonus = Math.max(maxGatewayBonus, 12);
+      }
+
+      // Không tự tính chính ô đó làm nguồn cung cho mình
+      if (rx === x && rz === z) continue;
+
+      // Nhóm 3: Nguồn cung Nông trại (agr_farm) - dùng Math.max (đặt nhiều nông trại cạnh nhau không cộng dồn)
+      if (neighbor.type === 'agr_farm') {
+        const bonus =
+          tileType === 'ind_food' || tileType === 'com_market' ? 20 : 10;
+        maxAgriBonus = Math.max(maxAgriBonus, bonus);
+      }
+
+      // Nhóm 4: Nguồn cung Chế biến / Sản xuất (ind_food, ind_factory) - dùng Math.max
+      if (neighbor.type === 'ind_food' || neighbor.type === 'ind_factory') {
+        const bonus =
+          tileType === 'com_market' ||
+          tileType === 'com_mall' ||
+          tileType === 'com_street'
+            ? 12
+            : 8;
+        maxIndustrialSupplyBonus = Math.max(maxIndustrialSupplyBonus, bonus);
+      }
+    }
+  }
+
+  return Math.max(
+    40,
+    Math.min(
+      100,
+      baseScore +
+        maxArterialBonus +
+        maxGatewayBonus +
+        maxAgriBonus +
+        maxIndustrialSupplyBonus
+    )
+  );
+}
+
+function hasActiveAgriFarmInRadius(
+  grid: TileData[][],
+  x: number,
+  z: number,
+  radius = 5
+): boolean {
+  for (
+    let rz = Math.max(0, z - radius);
+    rz <= Math.min(grid.length - 1, z + radius);
+    rz++
+  ) {
+    for (
+      let rx = Math.max(0, x - radius);
+      rx <= Math.min(grid[rz].length - 1, x + radius);
+      rx++
+    ) {
+      if (Math.abs(rx - x) + Math.abs(rz - z) > radius) continue;
+      const t = grid[rz][rx];
+      if (
+        t.type === 'agr_farm' &&
+        t.constructionRemainingDays === 0 &&
+        !t.isFlooded
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Kiểm tra điều kiện nghiêm ngặt để Tổ chức Đại Nhạc Hội Showbiz (Chống lỗi hack tiền đầu game khi chưa xây gì!):
  * 1. Không được đang có Đại nhạc hội diễn ra (activeConcertMonths === 0).
  * 2. Phải có ít nhất 1 Tổ Hợp Sân Vận Động & Showbiz [J] ĐÃ XÂY XONG (constructionRemainingDays === 0) và KHÔNG BỊ NGẬP.
- * 3. Sân vận động đó phải kết nối với Đường Nhựa/Cao Tốc và có tối thiểu 20/40 nhân sự đang làm việc (assignedWorkersTotal >= 20).
+ * 3. Sân vận động đó phải kết nối với Đường Nhựa/Vành Đai/Cao Tốc và có tối thiểu 20/40 nhân sự đang làm việc (assignedWorkersTotal >= 20).
  * 4. Thành phố phải có quy mô dân số tối thiểu 100 người.
  */
 export function evaluateConcertEligibility(
@@ -94,6 +226,7 @@ export function evaluateConcertEligibility(
           totalShowbizWorkers += workers;
           const nearMainRoad = hasNeighborOfType(grid, x, z, [
             'road_urban',
+            'road_ring',
             'road_highway',
           ]);
           if (nearMainRoad && workers >= 20) {
@@ -164,9 +297,13 @@ export function runJobPathfindingSystem(
       ? Math.max(0.4, 1 - (policies.pitEducated - 25) * 0.05)
       : 1.0;
 
+  const transitLevel: TransitLevel =
+    policies.transitLevel ?? (policies.subsidizeBusTransit ? 1 : 0);
+
   let supplyUnskilled = 0;
   let supplySkilled = 0;
   let supplyEducated = 0;
+  const resPositions: { x: number; z: number }[] = [];
 
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
@@ -176,6 +313,9 @@ export function runJobPathfindingSystem(
           tile.occupantsByTier.unskilled = 0;
           tile.currentOccupants =
             tile.occupantsByTier.skilled + tile.occupantsByTier.educated;
+        }
+        if (tile.currentOccupants > 0) {
+          resPositions.push({ x, z });
         }
         supplyUnskilled += tile.occupantsByTier.unskilled;
         supplySkilled += tile.occupantsByTier.skilled;
@@ -195,6 +335,9 @@ export function runJobPathfindingSystem(
   let demandEducated = 0;
   let staffShortageBuildings = 0;
 
+  // Phạm vi tìm việc mở rộng theo cấp độ Giao thông công cộng (0: 8 ô, 1: 14 ô, 2: toàn thành phố 36 ô)
+  const maxCommuteRange = transitLevel === 2 ? 36 : transitLevel === 1 ? 14 : 8;
+
   const workplaces: TileData[] = [];
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
@@ -209,6 +352,16 @@ export function runJobPathfindingSystem(
     }
   }
 
+  const isWithinTransitRange = (wp: TileData): number => {
+    if (resPositions.length === 0) return 1;
+    let minDist = Infinity;
+    for (const rp of resPositions) {
+      const d = Math.abs(wp.x - rp.x) + Math.abs(wp.z - rp.z);
+      if (d < minDist) minDist = d;
+    }
+    return minDist <= maxCommuteRange ? 1 : 0;
+  };
+
   workplaces.sort((a, b) => {
     const aPriority =
       a.type === 'util_power_water' || a.type === 'pub_admin' ? 1 : 0;
@@ -216,9 +369,14 @@ export function runJobPathfindingSystem(
       b.type === 'util_power_water' || b.type === 'pub_admin' ? 1 : 0;
     if (bPriority !== aPriority) return bPriority - aPriority;
 
+    const aInRange = isWithinTransitRange(a);
+    const bInRange = isWithinTransitRange(b);
+    if (bInRange !== aInRange) return bInRange - aInRange;
+
     const aRoad = hasNeighborOfType(grid, a.x, a.z, [
       'road_alley',
       'road_urban',
+      'road_ring',
       'road_highway',
     ])
       ? 1
@@ -226,6 +384,7 @@ export function runJobPathfindingSystem(
     const bRoad = hasNeighborOfType(grid, b.x, b.z, [
       'road_alley',
       'road_urban',
+      'road_ring',
       'road_highway',
     ])
       ? 1
@@ -408,6 +567,7 @@ export interface TileEconomicsResult {
   assignedWorkersTotal: number;
   staffingRatio: number;
   supplyFactor: number;
+  localSupplyIndex: number;
   roadBonus: number;
   citRate: number;
   fdiPciFactor: number;
@@ -438,13 +598,15 @@ export function computeTileEconomics(
   pci: number,
   supplyChainIndex: number,
   laborSupply: LaborTierCounts,
-  activeConcertMonths = 0
+  activeConcertMonths = 0,
+  difficulty: DifficultyLevel = 'hard'
 ): TileEconomicsResult {
   const built = isBuiltStructure(tile.type);
   const isComplete = tile.constructionRemainingDays === 0;
   const connectedToRoad = hasNeighborOfType(grid, tile.x, tile.z, [
     'road_alley',
     'road_urban',
+    'road_ring',
     'road_highway',
   ]);
   const spec = BUILDING_SPECS[tile.type] ?? BUILDING_SPECS.empty_land;
@@ -465,6 +627,11 @@ export function computeTileEconomics(
       : isComplete
       ? 1
       : 0;
+
+  const localSupplyIndex = isEconomicCitModule(tile.type)
+    ? calculateLocalSupplyIndex(grid, tile.x, tile.z, tile.type)
+    : 100;
+  tile.localSupplyIndex = localSupplyIndex;
 
   const supplyFactor = tile.isFlooded ? 0.25 : supplyChainIndex / 100;
   const roadBonus = connectedToRoad ? 1.15 : 0.75;
@@ -492,11 +659,13 @@ export function computeTileEconomics(
   // Quá tải Điện/Nước (utilityLoadPercent > 100%): giảm 35% sản lượng của các công trình kinh tế/thương mại (agr_farm, ind_*, com_*)
   const isEconomicOrCommercialTile =
     tile.type === 'agr_farm' ||
+    tile.type === 'ind_food' ||
     tile.type === 'ind_factory' ||
     tile.type === 'ind_fdi' ||
     tile.type === 'com_street' ||
     tile.type === 'com_market' ||
-    tile.type === 'com_mall';
+    tile.type === 'com_mall' ||
+    tile.type === 'com_office';
   const utilityOverloadOutputMultiplier = isEconomicOrCommercialTile
     ? infraStatus.utilityOverloadOutputMultiplier
     : 1.0;
@@ -507,6 +676,12 @@ export function computeTileEconomics(
 
   if (tile.type === 'agr_farm') {
     citRate = policies.citAgri;
+  } else if (tile.type === 'ind_food') {
+    citRate = policies.citIndustry;
+    // Nhận bonus sản lượng +25% từ agr_farm trong bán kính 5 ô (không cộng dồn)
+    const hasAgriBonus = hasActiveAgriFarmInRadius(grid, tile.x, tile.z, 5);
+    extraMultiplier =
+      (hasAgriBonus ? 1.25 : 0.9) * (0.85 + (localSupplyIndex / 100) * 0.15);
   } else if (tile.type === 'ind_factory') {
     citRate = policies.citIndustry;
   } else if (
@@ -515,6 +690,15 @@ export function computeTileEconomics(
     tile.type === 'com_mall'
   ) {
     citRate = policies.citMarket;
+  } else if (tile.type === 'com_office') {
+    citRate = policies.citMarket;
+    // Văn phòng Tài chính sinh CIT/PIT lớn khi PCI >= 65
+    const officePciFactor =
+      pci >= 65 ? 1.25 + (pci - 65) * 0.015 : 0.65;
+    extraMultiplier =
+      officePciFactor *
+      (brainDrainActive ? 0.7 : 1.0) *
+      (0.85 + (localSupplyIndex / 100) * 0.15);
   } else if (tile.type === 'priv_hospital' || tile.type === 'priv_school') {
     citRate = policies.citMarket;
     extraMultiplier = privateSuitability.multiplier;
@@ -556,13 +740,26 @@ export function computeTileEconomics(
         taxCollectionMultiplier
       ).toFixed(3)
     );
+  } else if (built && isComplete && tile.type === 'com_office') {
+    // Văn phòng Tài chính tạo thêm nguồn thu PIT chuyên gia tài chính cao cấp khi PCI >= 65
+    const officePitBoost = pci >= 65 ? 1.35 : 0.75;
+    pitRevenueBillion = Number(
+      (
+        (tile.assignedWorkers.skilled * 0.035 * (policies.pitMid / 100) +
+          tile.assignedWorkers.educated * 0.085 * (policies.pitEducated / 100)) *
+        officePitBoost *
+        taxCollectionMultiplier
+      ).toFixed(3)
+    );
   }
 
+  const diffUpkeepMult = getDifficultySpec(difficulty).upkeepMultiplier;
   const standaloneDrainUpkeep = !built && tile.hasDrainage ? 0.002 : 0;
   const maintenanceCostBillion = Number(
     (
-      (built && isComplete ? spec.maintenanceBillion : 0) +
-      standaloneDrainUpkeep
+      ((built && isComplete ? spec.maintenanceBillion : 0) +
+        standaloneDrainUpkeep) *
+      diffUpkeepMult
     ).toFixed(4)
   );
 
@@ -578,6 +775,7 @@ export function computeTileEconomics(
     assignedWorkersTotal,
     staffingRatio,
     supplyFactor,
+    localSupplyIndex,
     roadBonus,
     citRate,
     fdiPciFactor,
@@ -602,7 +800,8 @@ export function getTileDetailedReport(
   metrics: MacroMetrics,
   currentMonth = 1,
   currentYear = 2026,
-  activeConcertMonths = 0
+  activeConcertMonths = 0,
+  difficulty: DifficultyLevel = 'hard'
 ): TileDetailedReport {
   const title = TILE_LABELS[tile.type];
   const isUnderConstruction = tile.constructionRemainingDays > 0;
@@ -619,7 +818,8 @@ export function getTileDetailedReport(
       skilled: metrics.labor.skilled,
       educated: metrics.labor.educated,
     },
-    activeConcertMonths
+    activeConcertMonths,
+    difficulty
   );
 
   const reqTotal = econ.reqWorkersTotal;
@@ -709,15 +909,31 @@ export function getTileDetailedReport(
         corporateTaxLabel = 'Thuế TNDN Thương mại & Siêu thị';
         corporateTaxRate = policies.citMarket;
         break;
+      case 'com_office':
+        categoryLabel = 'Văn Phòng Tài Chính & Ngân Hàng';
+        dominantLaborLabel =
+          'Cần Chuyên gia tài chính có bằng cấp · Đột phá CIT/PIT khi PCI ≥ 65';
+        corporateTaxKey = 'citMarket';
+        corporateTaxLabel = 'Thuế TNDN Dịch vụ Tài chính (CIT)';
+        corporateTaxRate = policies.citMarket;
+        break;
       case 'agr_farm':
-        categoryLabel = 'Nông Lâm & Thủy Hải Sản';
+        categoryLabel = 'Nông Lâm & Thủy Hải Sản (Nuôi 180 dân/trại)';
         dominantLaborLabel = 'Cần Nông dân & Lao động phổ thông';
         corporateTaxKey = 'citAgri';
         corporateTaxLabel = 'Thuế TNDN Nông lâm thủy sản';
         corporateTaxRate = policies.citAgri;
         break;
+      case 'ind_food':
+        categoryLabel = 'Xưởng Chế Biến Thực Phẩm Sạch';
+        dominantLaborLabel =
+          'Cần Công nhân chế biến · +25% sản lượng khi gần Nông Trại [9]';
+        corporateTaxKey = 'citIndustry';
+        corporateTaxLabel = 'Thuế TNDN Chế biến thực phẩm';
+        corporateTaxRate = policies.citIndustry;
+        break;
       case 'ind_factory':
-        categoryLabel = 'Công Nghiệp Sản Xuất';
+        categoryLabel = 'Công Nghiệp Sản Xuất Nặng (Ô nhiễm bán kính 2 ô)';
         dominantLaborLabel = 'Cần Công nhân nhà máy & Kỹ thuật viên trung cấp';
         corporateTaxKey = 'citIndustry';
         corporateTaxLabel = 'Thuế TNDN Công nghiệp sản xuất';
@@ -775,7 +991,10 @@ export function getTileDetailedReport(
     }
   } else if (isRoadTile(tile.type)) {
     const junctionType = getLocalRoadJunctionType(grid, tile.x, tile.z);
-    categoryLabel = 'Hạ Tầng Giao Thông Đường Bộ';
+    categoryLabel =
+      tile.type === 'road_ring'
+        ? 'Hạ Tầng Đại Lộ Vành Đai (Không đấu nối Đường Hẻm)'
+        : 'Hạ Tầng Giao Thông Đường Bộ';
     dominantLaborLabel = `Kết nối tự động: ${
       junctionType === 'crossroad'
         ? 'Ngã Tư (Cross-Intersection)'
@@ -1027,6 +1246,7 @@ export function getTileDetailedReport(
     publicServiceBadgeLabel,
     publicServiceSummaryLabel,
     publicServiceDetailLabel,
+    localSupplyIndex: econ.localSupplyIndex,
   };
 }
 
@@ -1041,6 +1261,7 @@ export function calculatePCI(
   pciTaxScore: number;
 } {
   let urbanRoads = 0;
+  let ringRoads = 0;
   let highways = 0;
   let powerWaterCount = 0;
   let adminCount = 0;
@@ -1057,6 +1278,7 @@ export function calculatePCI(
         if (t.hasDrainage) drainageCount++;
         if (t.isFlooded) floodedCount++;
         if (t.type === 'road_urban') urbanRoads++;
+        if (t.type === 'road_ring') ringRoads++;
         if (t.type === 'road_highway') highways++;
         if (t.type === 'util_power_water') powerWaterCount++;
         if (t.type === 'pub_admin') adminCount++;
@@ -1076,7 +1298,7 @@ export function calculatePCI(
   const drainageRatio = builtCount > 0 ? drainageCount / builtCount : 0.6;
   const rawInfra =
     45 +
-    Math.min(25, urbanRoads * 1.5 + highways * 2.5) +
+    Math.min(25, urbanRoads * 1.5 + ringRoads * 2.0 + highways * 2.5) +
     Math.min(20, powerWaterCount * 12) +
     Math.round(drainageRatio * 15) -
     floodedCount * 5;
@@ -1111,7 +1333,8 @@ export function calculateMacroEconomy(
   season: SeasonType,
   activeConcertMonths: number,
   treasury = STARTING_TREASURY,
-  crisisMonthsElapsed = 0
+  crisisMonthsElapsed = 0,
+  difficulty: DifficultyLevel = 'hard'
 ): MacroMetrics {
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
@@ -1127,13 +1350,27 @@ export function calculateMacroEconomy(
   const jobResult = runJobPathfindingSystem(grid, policies);
   const infraStatus = evaluatePublicInfraAndAdminStatus(grid);
 
+  // Đồng bộ chính sách giao thông mới (Tab [G]) và giữ tương thích ngược
+  const transitLevel: TransitLevel =
+    policies.transitLevel ?? (policies.subsidizeBusTransit ? 1 : 0);
+  const sidewalkPolicy: SidewalkPolicy = !policies.allowSidewalkEconomy
+    ? 'ban'
+    : policies.sidewalkPolicy ?? 'informal';
+  const banTrucksInResidential = Boolean(
+    policies.banTrucksInResidential ?? policies.banPeakHeavyTrucks
+  );
+  const enableTollbooth = Boolean(policies.enableTollbooth);
+
   let housingCapacity = 0;
   let resLowCount = 0;
   let resMidCount = 0;
   let resHighCount = 0;
   let marketCount = 0;
   let mallCount = 0;
+  let officeCount = 0;
   let agriCount = 0;
+  let activeAgriCount = 0;
+  let foodFactoryCount = 0;
   let factoryCount = 0;
   let fdiCount = 0;
   let adminCount = 0;
@@ -1143,6 +1380,7 @@ export function calculateMacroEconomy(
   let showbizCount = 0;
   let alleyCount = 0;
   let urbanRoadCount = 0;
+  let ringRoadCount = 0;
   let highwayCount = 0;
   let sidewalkVendorTiles = 0;
   let builtCount = 0;
@@ -1151,6 +1389,9 @@ export function calculateMacroEconomy(
   let disputeTiles = 0;
   let housesOnlyOnAlley = 0;
   let underConstructionCount = 0;
+
+  const activeFactories: { x: number; z: number }[] = [];
+  const completedResidentialTiles: { x: number; z: number }[] = [];
 
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
@@ -1165,7 +1406,7 @@ export function calculateMacroEconomy(
 
       const nearUrbanRoad = hasNeighborOfType(grid, x, z, ['road_urban']);
       tile.sidewalkVendors =
-        policies.allowSidewalkEconomy &&
+        sidewalkPolicy !== 'ban' &&
         nearUrbanRoad &&
         tile.constructionRemainingDays === 0 &&
         (tile.type === 'res_low' ||
@@ -1200,12 +1441,17 @@ export function calculateMacroEconomy(
       if (tile.constructionRemainingDays === 0) {
         if (isResidentialTile(tile.type)) {
           housingCapacity += tile.maxCapacity;
+          completedResidentialTiles.push({ x, z });
         }
         switch (tile.type) {
           case 'res_low':
             resLowCount++;
             if (
-              !hasNeighborOfType(grid, x, z, ['road_urban', 'road_highway'])
+              !hasNeighborOfType(grid, x, z, [
+                'road_urban',
+                'road_ring',
+                'road_highway',
+              ])
             ) {
               housesOnlyOnAlley++;
             }
@@ -1222,11 +1468,26 @@ export function calculateMacroEconomy(
           case 'com_mall':
             mallCount++;
             break;
-          case 'agr_farm':
+          case 'com_office':
+            officeCount++;
+            break;
+          case 'agr_farm': {
             agriCount++;
+            const farmWorkers =
+              tile.assignedWorkers.unskilled +
+              tile.assignedWorkers.skilled +
+              tile.assignedWorkers.educated;
+            if (farmWorkers > 0 || !tile.isFlooded) {
+              activeAgriCount++;
+            }
+            break;
+          }
+          case 'ind_food':
+            foodFactoryCount++;
             break;
           case 'ind_factory':
             factoryCount++;
+            activeFactories.push({ x, z });
             break;
           case 'ind_fdi':
             fdiCount++;
@@ -1264,6 +1525,9 @@ export function calculateMacroEconomy(
           case 'road_urban':
             urbanRoadCount++;
             break;
+          case 'road_ring':
+            ringRoadCount++;
+            break;
           case 'road_highway':
             highwayCount++;
             break;
@@ -1272,11 +1536,32 @@ export function calculateMacroEconomy(
     }
   }
 
+  // Ô nhiễm công nghiệp nặng (`ind_factory`): giảm -4 Hạnh phúc mỗi ô dân cư trong bán kính 2 ô
+  let pollutedResidentialCount = 0;
+  if (activeFactories.length > 0 && completedResidentialTiles.length > 0) {
+    for (const res of completedResidentialTiles) {
+      const nearFactory = activeFactories.some(
+        (fac) => Math.abs(fac.x - res.x) <= 2 && Math.abs(fac.z - res.z) <= 2
+      );
+      if (nearFactory) {
+        pollutedResidentialCount++;
+      }
+    }
+  }
+  const pollutionPenaltyHappiness = pollutedResidentialCount * 4;
+
   const brainDrainActive = policies.pitEducated > 25;
   const unskilled = jobResult.totalSupply.unskilled;
   const skilled = jobResult.totalSupply.skilled;
   const educated = jobResult.totalSupply.educated;
   const population = unskilled + skilled + educated;
+
+  // An ninh Lương thực (`agr_farm`): mỗi nông trại nuôi tối đa 180 dân
+  const foodCapacityPop = activeAgriCount * 180;
+  const foodSupplyPercent =
+    population <= 0
+      ? 100
+      : Math.min(200, Math.round((foodCapacityPop / population) * 100));
 
   const totalJobSlots =
     jobResult.totalDemand.unskilled +
@@ -1294,43 +1579,61 @@ export function calculateMacroEconomy(
     crisisPciPenalty
   );
 
+  const hasMainRoads =
+    urbanRoadCount > 0 || ringRoadCount > 0 || highwayCount > 0;
+  const transitRelief =
+    !hasMainRoads
+      ? 0
+      : transitLevel === 2
+      ? 11.5
+      : transitLevel === 1
+      ? 5.5
+      : 0;
+
   const roadCapacity =
-    urbanRoadCount * 4.5 + highwayCount * 8.5 + alleyCount * 1.5;
+    urbanRoadCount * 4.5 +
+    ringRoadCount * 6.5 +
+    highwayCount * 8.5 +
+    alleyCount * 1.5;
   const vehicleDemand =
     population / 180 +
     marketCount * 4.5 +
-    (policies.allowSidewalkEconomy ? sidewalkVendorTiles * 1.5 : 0) +
+    officeCount * 2.5 +
+    (sidewalkPolicy === 'informal'
+      ? sidewalkVendorTiles * 1.5
+      : sidewalkPolicy === 'licensed'
+      ? sidewalkVendorTiles * 0.6
+      : 0) +
     (activeConcertMonths > 0 ? showbizCount * 10 : 0) -
-    (policies.subsidizeBusTransit && (urbanRoadCount > 0 || highwayCount > 0)
-      ? 5.5
-      : 0) -
-    (policies.banPeakHeavyTrucks && (urbanRoadCount > 0 || highwayCount > 0)
-      ? 3.5
-      : 0);
+    transitRelief -
+    (banTrucksInResidential && hasMainRoads ? 3.5 : 0);
 
-  const signalPenalty = Math.abs(policies.greenLightMainRatio - 58) * 0.3;
   const floodTrafficPenalty = floodedTileCount * 5.0;
 
+  // Đã loại bỏ công thức Math.abs(greenLightMainRatio - 58) * 0.3 theo thiết kế mới
   const rawTrafficSpeed =
     builtCount === 0
       ? 100
       : 84 +
         Math.min(16, roadCapacity - vehicleDemand) -
-        signalPenalty -
         floodTrafficPenalty;
   const trafficSpeedIndex = Math.max(
     15,
     Math.min(100, Math.round(rawTrafficSpeed))
   );
 
-  const supplySources = agriCount * 25 + factoryCount * 15 + 35;
-  const logisticsPenaltyFromTruckBan = policies.banPeakHeavyTrucks ? 6 : 0;
+  const supplySources =
+    agriCount * 25 + foodFactoryCount * 18 + factoryCount * 15 + 35;
+  const logisticsPenaltyFromTruckBan =
+    banTrucksInResidential && ringRoadCount === 0 && highwayCount === 0 ? 5 : 0;
   const rawSupplyChain =
     builtCount === 0
       ? 100
       : Math.min(
           100,
-          55 + supplySources * 0.5 + (urbanRoadCount + highwayCount * 2) * 1.8
+          55 +
+            supplySources * 0.5 +
+            (urbanRoadCount + ringRoadCount * 1.6 + highwayCount * 2) * 1.8
         ) *
           (0.5 + (trafficSpeedIndex / 100) * 0.5) -
         floodedTileCount * 5 -
@@ -1352,7 +1655,9 @@ export function calculateMacroEconomy(
 
   const totalRes = resLowCount + resMidCount + resHighCount;
   const emergencyAccessCoverage =
-    totalRes === 0
+    sidewalkPolicy === 'licensed'
+      ? 100
+      : totalRes === 0
       ? 100
       : Math.max(
           25,
@@ -1395,7 +1700,8 @@ export function calculateMacroEconomy(
         pci,
         supplyChainIndex,
         laborSupplyForEcon,
-        activeConcertMonths
+        activeConcertMonths,
+        difficulty
       );
 
       totalMaintenance += econ.maintenanceCostBillion;
@@ -1419,7 +1725,48 @@ export function calculateMacroEconomy(
   );
   const pitRevenue = Math.max(totalResidentPitRevenue, employedPitRevenue);
 
-  const monthlyRevenue = Number((pitRevenue + totalCitRevenue).toFixed(2));
+  // Thu phí BOT 30.000 VNĐ/lượt (0.00003 Tỷ/lượt) bù đắp bảo trì đường bộ
+  const arterialRoadUnits =
+    urbanRoadCount + ringRoadCount * 1.6 + highwayCount * 2.2;
+  const monthlyTollTrips =
+    enableTollbooth && arterialRoadUnits > 0
+      ? Math.round(
+          arterialRoadUnits * 280 +
+            population * 4.5 +
+            (factoryCount + foodFactoryCount + fdiCount) * 650
+        )
+      : 0;
+  const tollboothRevenue = enableTollbooth
+    ? Number((monthlyTollTrips * 0.00003).toFixed(3))
+    : 0;
+
+  // Thu phí cấp phép vỉa hè ('licensed')
+  const sidewalkLicenseRevenue =
+    sidewalkPolicy === 'licensed'
+      ? Number((sidewalkVendorTiles * 0.035).toFixed(3))
+      : 0;
+
+  const monthlyRevenue = Number(
+    (
+      pitRevenue +
+      totalCitRevenue +
+      tollboothRevenue +
+      sidewalkLicenseRevenue
+    ).toFixed(2)
+  );
+
+  // Chi phí trợ giá Bus / BRT (0: 0 Tỷ, 1: 0.15 Tỷ/tháng khi có BRT/Bus nâng cấp, 2: 0.40 Tỷ/tháng)
+  // Lưu ý: giữ transitUpkeep chỉ tính khi người chơi chọn BRT Nhanh (2) hoặc bật tường minh transitLevel trên mạng lưới có dân cư,
+  // hoặc tính chuẩn theo transitLevel:
+  const diffUpkeepMult = getDifficultySpec(difficulty).upkeepMultiplier;
+  const transitUpkeep =
+    builtCount === 0 || population === 0
+      ? 0
+      : transitLevel === 2
+      ? Number((0.4 * diffUpkeepMult).toFixed(2))
+      : transitLevel === 1 && policies.transitLevel !== undefined
+      ? Number((0.15 * diffUpkeepMult).toFixed(2))
+      : 0;
 
   const welfareCost =
     population === 0
@@ -1433,7 +1780,12 @@ export function calculateMacroEconomy(
     builtCount === 0
       ? 0
       : Number(
-          (totalMaintenance + welfareCost + floodDamageCost).toFixed(2)
+          (
+            totalMaintenance +
+            transitUpkeep +
+            welfareCost +
+            floodDamageCost
+          ).toFixed(2)
         );
   const netBalance = Number((monthlyRevenue - monthlyExpense).toFixed(2));
 
@@ -1452,7 +1804,7 @@ export function calculateMacroEconomy(
         securityCount * 10 +
         disputeTiles * 9 +
         compCrimeBonus +
-        (policies.allowSidewalkEconomy ? 0 : 6) +
+        (sidewalkPolicy === 'ban' ? 6 : sidewalkPolicy === 'licensed' ? -2 : 0) +
         (policies.pitLow > 15 ? (policies.pitLow - 15) * 1.2 : 0);
   const crimeRisk = Math.max(2, Math.min(100, Math.round(rawCrime)));
 
@@ -1467,6 +1819,17 @@ export function calculateMacroEconomy(
       ? -8
       : 0;
 
+  const sidewalkHappinessBonus =
+    sidewalkPolicy === 'licensed'
+      ? 6
+      : sidewalkPolicy === 'informal'
+      ? 5
+      : -4;
+
+  // Phạt thiếu lương thực khi có agr_farm nhưng không đủ nuôi dân (foodSupplyPercent < 100%)
+  const foodShortagePenalty =
+    agriCount > 0 && population > 0 && foodSupplyPercent < 100 ? 6 : 0;
+
   const rawHappiness =
     builtCount === 0
       ? 85 +
@@ -1474,7 +1837,7 @@ export function calculateMacroEconomy(
         pitHappinessRelief +
         compensationHappinessBonus
       : 70 +
-        (policies.allowSidewalkEconomy ? 5 : -4) +
+        sidewalkHappinessBonus +
         marketCount * 3 +
         eduMedCount * 6 +
         showbizCount * (activeConcertMonths > 0 ? 9 : 4) +
@@ -1486,7 +1849,10 @@ export function calculateMacroEconomy(
         jobResult.staffShortageBuildings * 3 -
         (100 - trafficSpeedIndex) * 0.15 -
         (brainDrainActive ? 9 : 0) -
-        (infraStatus.isUtilityOverloaded ? 8 : 0);
+        (infraStatus.isUtilityOverloaded ? 8 : 0) -
+        pollutionPenaltyHappiness -
+        foodShortagePenalty -
+        (enableTollbooth ? 2 : 0);
   const happiness = Math.max(5, Math.min(100, Math.round(rawHappiness)));
 
   const rawStability =
@@ -1501,7 +1867,8 @@ export function calculateMacroEconomy(
         (happiness - 50) * 0.35 -
         crimeRisk * 0.3 -
         disputeTiles * 10 -
-        floodedTileCount * 3.5;
+        floodedTileCount * 3.5 -
+        foodShortagePenalty;
   const socialStability = Math.max(0, Math.min(100, Math.round(rawStability)));
 
   const drainageCoverage =
@@ -1560,6 +1927,14 @@ export function calculateMacroEconomy(
     isUtilityOverloaded: infraStatus.isUtilityOverloaded,
     hasActivePublicAdmin: infraStatus.hasActivePublicAdmin,
     taxCollectionEfficiencyPercent: infraStatus.taxCollectionEfficiencyPercent,
+    foodSupplyPercent,
+    foodCapacityPop,
+    tollboothRevenue,
+    transitUpkeep,
+    sidewalkLicenseRevenue,
+    pollutionPenaltyHappiness,
+    totalRegionalPopulation: population,
+    totalRegionalJobs: totalEmployed,
   };
 }
 
@@ -1607,7 +1982,8 @@ export function runEndOfMonthSettlement(
   season: SeasonType,
   treasuryAfter: number,
   fdiBonus = 0,
-  activeConcertMonths = 0
+  activeConcertMonths = 0,
+  difficulty: DifficultyLevel = 'hard'
 ): LedgerEntry {
   const laborSupplyForEcon: LaborTierCounts = {
     unskilled: metrics.labor.unskilled,
@@ -1652,7 +2028,8 @@ export function runEndOfMonthSettlement(
         metrics.pci,
         metrics.supplyChainIndex,
         laborSupplyForEcon,
-        activeConcertMonths
+        activeConcertMonths,
+        difficulty
       );
 
       const entityRevenue = econ.grossOutputBillion;
@@ -1706,6 +2083,11 @@ export function runEndOfMonthSettlement(
     }
   }
 
+  const tollAndSidewalkRev = Number(
+    ((metrics.tollboothRevenue ?? 0) + (metrics.sidewalkLicenseRevenue ?? 0)).toFixed(3)
+  );
+  const transitCost = Number((metrics.transitUpkeep ?? 0).toFixed(3));
+
   const welfareCost =
     metrics.population === 0
       ? 0
@@ -1720,12 +2102,14 @@ export function runEndOfMonthSettlement(
     (welfareCost + floodDamageCost).toFixed(2)
   );
 
-  const roundedRev = Number(totalRevenue.toFixed(2));
-  const roundedCit = Number(totalTaxCIT.toFixed(2));
+  const roundedRev = Number((totalRevenue + tollAndSidewalkRev).toFixed(2));
+  const roundedCit = Number((totalTaxCIT + tollAndSidewalkRev).toFixed(2));
   const roundedPit = Number(totalTaxPIT.toFixed(2));
   const buildingMaintenanceCost = Number(rawBuildingMaint.toFixed(3));
-  const infraMaintenanceCost = Number(rawInfraMaint.toFixed(3));
-  const roundedMaint = buildingMaintenanceCost + infraMaintenanceCost;
+  const infraMaintenanceCost = Number((rawInfraMaint + transitCost).toFixed(3));
+  const roundedMaint = Number(
+    (buildingMaintenanceCost + infraMaintenanceCost).toFixed(3)
+  );
   const netIncome = Number(
     (
       roundedCit +

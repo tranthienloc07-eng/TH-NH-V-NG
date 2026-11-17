@@ -8,6 +8,8 @@ import {
   CompensationLevel,
   MacroMetrics,
   MacroPolicies,
+  SidewalkPolicy,
+  TransitLevel,
 } from '../game/types';
 
 interface MacroPolicyDrawerProps {
@@ -64,19 +66,19 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
         e.preventDefault();
         e.stopPropagation();
       }}
-      className="hud-container info-panel-scroll custom-scrollbar pointer-events-auto w-full max-w-[880px] max-h-[80vh] overflow-y-auto mb-2 rounded-xl border border-amber-500/35 bg-[#0f1924]/95 p-4 text-slate-100 shadow-2xl"
+      className="hud-container info-panel-scroll custom-scrollbar pointer-events-auto w-full max-w-[920px] max-h-[80vh] overflow-y-auto mb-2 rounded-xl border border-amber-500/35 bg-[#0f1924]/95 p-3.5 text-slate-100 shadow-2xl"
     >
-      <div className="flex items-center justify-between border-b border-slate-700/70 pb-2.5 mb-3">
+      <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 mb-2.5">
         <div>
           <h2 className="text-base font-bold tracking-tight text-amber-300">
             {activeTab === 'economy'
-              ? 'Điều Hành Kinh Tế Vĩ Mô, Thuế Đa Tầng & Đền Bù Giải Tỏa'
-              : 'Điều Tiết Giao Thông Vi Mô, Kinh Tế Vỉa Hè & Chuỗi Cung Ứng'}
+              ? 'Điều Hành Kinh Tế Vĩ Mô, 5 Sắc Thuế CIT/PIT & Đền Bù Giải Tỏa'
+              : 'Điều Tiết Vận Tải Công Cộng (Bus/BRT), Vỉa Hè Cấp Phép & An Ninh Lương Thực'}
           </h2>
           <p className="text-xs text-slate-300">
             {activeTab === 'economy'
               ? 'PCI = Hạ tầng (40%) + Hành chính (30%) + Ưu đãi Thuế FDI (30%) · Cẩn trọng ngưỡng Thuế TNCN Bằng cấp > 25%'
-              : 'Quản lý chu kỳ đèn xanh, phân luồng giờ cao điểm, vỉa hè và lễ hội Showbiz'}
+              : 'Đầu tư Bus/BRT mở rộng bán kính việc làm, Trạm thu phí bù đắp đường bộ, Vỉa hè cấp phép & Chuỗi cung ứng lương thực'}
           </p>
         </div>
         <button
@@ -89,11 +91,11 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
       </div>
 
       {activeTab === 'economy' ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 text-xs">
           {/* Column 1: Thuế TNCN Lũy tiến & Phân tầng Lao động */}
           <div
             data-testid="policy-col-pit"
-            className={`rounded-lg bg-[#152231] p-3 border space-y-2.5 ${
+            className={`rounded-lg bg-[#152231] p-3 border space-y-2 ${
               pitUnlocked
                 ? 'border-slate-700/70'
                 : 'border-slate-700/50 opacity-80'
@@ -118,7 +120,7 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="pit-low-slider"
-                className="flex justify-between text-slate-300 mb-1"
+                className="flex justify-between text-slate-300 mb-0.5"
               >
                 <span>Lao động phổ thông ({metrics.labor.unskilled} người)</span>
                 <span className="font-mono tabular-nums font-bold text-emerald-300">
@@ -145,7 +147,7 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="pit-mid-slider"
-                className="flex justify-between text-slate-300 mb-1"
+                className="flex justify-between text-slate-300 mb-0.5"
               >
                 <span>Lao động trung cấp ({metrics.labor.skilled} người)</span>
                 <span className="font-mono tabular-nums font-bold text-sky-300">
@@ -172,7 +174,7 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="pit-educated-slider"
-                className="flex justify-between text-slate-300 mb-1"
+                className="flex justify-between text-slate-300 mb-0.5"
               >
                 <span>Lao động có bằng cấp ({metrics.labor.educated} người)</span>
                 <span
@@ -206,17 +208,17 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             </div>
           </div>
 
-          {/* Column 2: Thuế TNDN (CIT) & Chỉ số PCI */}
+          {/* Column 2: 5 Thanh trượt Thuế TNDN (CIT) & Chỉ số PCI */}
           <div
             data-testid="policy-col-cit"
-            className={`rounded-lg bg-[#152231] p-3 border space-y-2.5 ${
+            className={`rounded-lg bg-[#152231] p-3 border space-y-1.5 ${
               citUnlocked
                 ? 'border-slate-700/70'
                 : 'border-slate-700/50 opacity-80'
             }`}
           >
             <div className="font-semibold text-amber-200 flex items-center justify-between">
-              <span>Thuế Doanh Nghiệp (CIT) & PCI</span>
+              <span>5 Sắc Thuế Doanh Nghiệp (CIT) & PCI</span>
               <span className="font-mono tabular-nums text-emerald-300">
                 PCI {metrics.pci}/100
               </span>
@@ -234,9 +236,9 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="cit-fdi-slider"
-                className="flex justify-between text-slate-300 mb-1"
+                className="flex justify-between text-slate-300 text-[11px]"
               >
-                <span>FDI Công nghệ cao (Trọng số 30% PCI)</span>
+                <span>1. FDI & Văn phòng Tài chính (30% PCI)</span>
                 <span className="font-mono tabular-nums font-bold text-cyan-300">
                   {policies.citFdi}%
                 </span>
@@ -252,7 +254,7 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
                   citUnlocked &&
                   onUpdatePolicy('citFdi', Number(e.target.value))
                 }
-                className={`w-full accent-cyan-400 ${
+                className={`w-full h-1.5 accent-cyan-400 ${
                   citUnlocked ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
                 }`}
               />
@@ -261,9 +263,9 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="cit-market-slider"
-                className="flex justify-between text-slate-300 mb-1"
+                className="flex justify-between text-slate-300 text-[11px]"
               >
-                <span>Chợ truyền thống & Bán lẻ</span>
+                <span>2. Chợ truyền thống & Bán lẻ</span>
                 <span className="font-mono tabular-nums font-bold text-amber-300">
                   {policies.citMarket}%
                 </span>
@@ -279,25 +281,98 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
                   citUnlocked &&
                   onUpdatePolicy('citMarket', Number(e.target.value))
                 }
-                className={`w-full accent-amber-400 ${
+                className={`w-full h-1.5 accent-amber-400 ${
                   citUnlocked ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
                 }`}
               />
             </div>
 
-            <div className="pt-1 border-t border-slate-700/60 text-[11px] text-slate-300 space-y-1">
-              <div className="flex justify-between">
-                <span>Hạ tầng (40%) · Hành chính (30%)</span>
-                <span className="font-mono tabular-nums">
-                  {metrics.pciInfraScore} · {metrics.pciAdminScore}
+            <div>
+              <label
+                htmlFor="cit-agri-slider"
+                className="flex justify-between text-slate-300 text-[11px]"
+              >
+                <span>3. Nông Thủy Sản (agr_farm)</span>
+                <span className="font-mono tabular-nums font-bold text-emerald-300">
+                  {policies.citAgri}%
                 </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Điểm Ưu đãi Thuế FDI (30%)</span>
-                <span className="font-mono tabular-nums text-cyan-300">
-                  {metrics.pciTaxScore}
+              </label>
+              <input
+                id="cit-agri-slider"
+                type="range"
+                min={5}
+                max={30}
+                disabled={!citUnlocked}
+                value={policies.citAgri}
+                onChange={(e) =>
+                  citUnlocked &&
+                  onUpdatePolicy('citAgri', Number(e.target.value))
+                }
+                className={`w-full h-1.5 accent-emerald-400 ${
+                  citUnlocked ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                }`}
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="cit-industry-slider"
+                className="flex justify-between text-slate-300 text-[11px]"
+              >
+                <span>4. Nhà Máy SX & Thực phẩm</span>
+                <span className="font-mono tabular-nums font-bold text-sky-300">
+                  {policies.citIndustry}%
                 </span>
-              </div>
+              </label>
+              <input
+                id="cit-industry-slider"
+                type="range"
+                min={5}
+                max={30}
+                disabled={!citUnlocked}
+                value={policies.citIndustry}
+                onChange={(e) =>
+                  citUnlocked &&
+                  onUpdatePolicy('citIndustry', Number(e.target.value))
+                }
+                className={`w-full h-1.5 accent-sky-400 ${
+                  citUnlocked ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                }`}
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="cit-showbiz-slider"
+                className="flex justify-between text-slate-300 text-[11px]"
+              >
+                <span>5. Tổ Hợp Showbiz & Sự Kiện</span>
+                <span className="font-mono tabular-nums font-bold text-fuchsia-300">
+                  {policies.citShowbiz}%
+                </span>
+              </label>
+              <input
+                id="cit-showbiz-slider"
+                type="range"
+                min={5}
+                max={30}
+                disabled={!citUnlocked}
+                value={policies.citShowbiz}
+                onChange={(e) =>
+                  citUnlocked &&
+                  onUpdatePolicy('citShowbiz', Number(e.target.value))
+                }
+                className={`w-full h-1.5 accent-fuchsia-400 ${
+                  citUnlocked ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                }`}
+              />
+            </div>
+
+            <div className="pt-1 border-t border-slate-700/60 text-[11px] text-slate-300 flex justify-between">
+              <span>PCI: Hạ tầng {metrics.pciInfraScore} · HC {metrics.pciAdminScore}</span>
+              <span className="font-mono tabular-nums text-cyan-300">
+                Ưu đãi FDI {metrics.pciTaxScore}
+              </span>
             </div>
           </div>
 
@@ -397,142 +472,204 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-          {/* Column 1: Đèn tín hiệu & Phân luồng */}
-          <div className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2.5">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 text-xs">
+          {/* Column 1: Vận tải Công cộng (transitLevel) & Trạm Thu Phí (enableTollbooth) */}
+          <div
+            data-testid="traffic-col-transit"
+            className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2.5"
+          >
             <div className="font-semibold text-amber-200 flex justify-between">
-              <span>Đèn Tín Hiệu & Cắm Biển Phân Luồng</span>
+              <span>Vận Tải Công Cộng &amp; Thu Phí</span>
               <span className="font-mono tabular-nums text-sky-300">
                 Tốc độ {metrics.trafficSpeedIndex}%
               </span>
             </div>
 
-            <div>
-              <label
-                htmlFor="green-light-slider"
-                className="flex justify-between text-slate-300 mb-1"
-              >
-                <span>Chu kỳ Đèn Xanh trục chính đô thị</span>
-                <span className="font-mono tabular-nums font-bold text-emerald-300">
-                  {policies.greenLightMainRatio}%
-                </span>
-              </label>
-              <input
-                id="green-light-slider"
-                type="range"
-                min={30}
-                max={75}
-                value={policies.greenLightMainRatio}
-                onChange={(e) =>
-                  onUpdatePolicy('greenLightMainRatio', Number(e.target.value))
-                }
-                className="w-full accent-emerald-400 cursor-pointer"
-              />
+            <div className="space-y-1">
+              <span className="block text-slate-300 text-[11px]">
+                Hệ thống Vận tải Công cộng (Tăng tốc độ &amp; Mở rộng tìm việc):
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    [0, '0: Tự phát', '0 Tỷ/th'],
+                    [1, '1: Bus Trợ giá', '-0,15 Tỷ'],
+                    [2, '2: BRT Nhanh', '-0,40 Tỷ'],
+                  ] as [TransitLevel, string, string][]
+                ).map(([lvl, title, costLbl]) => {
+                  const active = (policies.transitLevel ?? 0) === lvl;
+                  return (
+                    <button
+                      key={lvl}
+                      type="button"
+                      data-testid={`btn-transit-level-${lvl}`}
+                      onClick={() => {
+                        onUpdatePolicy('transitLevel', lvl);
+                        onUpdatePolicy('subsidizeBusTransit', lvl > 0);
+                      }}
+                      className={`p-1.5 rounded text-center border cursor-pointer transition-colors ${
+                        active
+                          ? 'bg-sky-500 text-slate-950 border-sky-300 font-bold'
+                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                      }`}
+                    >
+                      <div className="text-[11px] leading-tight">{title}</div>
+                      <div
+                        className={`text-[10px] font-mono ${
+                          active ? 'text-slate-900' : 'text-slate-400'
+                        }`}
+                      >
+                        {costLbl}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-slate-300">
-                Cấm xe tải nặng giờ cao điểm
-              </span>
+            <div className="flex items-center justify-between pt-1 border-t border-slate-700/60">
+              <div>
+                <div className="text-slate-200 font-medium">
+                  Trạm thu phí BOT trục chính
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Thu 30.000 VNĐ/lượt ô tô/tải bù phí bảo trì đường
+                </div>
+              </div>
               <button
                 type="button"
+                data-testid="btn-toggle-tollbooth"
                 onClick={() =>
-                  onUpdatePolicy(
-                    'banPeakHeavyTrucks',
-                    !policies.banPeakHeavyTrucks
-                  )
+                  onUpdatePolicy('enableTollbooth', !policies.enableTollbooth)
                 }
                 className={`px-2.5 py-1 rounded font-semibold cursor-pointer whitespace-nowrap ${
-                  policies.banPeakHeavyTrucks
+                  policies.enableTollbooth
+                    ? 'bg-amber-400 text-slate-950'
+                    : 'bg-slate-800 text-slate-300 border border-slate-600'
+                }`}
+              >
+                {policies.enableTollbooth ? 'Đang Thu Phí' : 'Tắt Thu Phí'}
+              </button>
+            </div>
+          </div>
+
+          {/* Column 2: Kinh tế Vỉa hè 3 cấp độ & Cấm xe tải khu dân cư */}
+          <div
+            data-testid="traffic-col-sidewalk"
+            className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2.5"
+          >
+            <div className="font-semibold text-amber-200 flex justify-between">
+              <span>Kinh Tế Vỉa Hè &amp; Phân Luồng Dân Cư</span>
+              <span className="font-mono tabular-nums text-amber-300">
+                PCCC {metrics.emergencyAccessCoverage}%
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              <span className="block text-slate-300 text-[11px]">
+                Chính sách Quản lý Vỉa hè (sidewalkPolicy):
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    ['ban', 'Cấm Vỉa Hè', 'Đường thoáng'],
+                    ['informal', 'Tự Phát', 'Dễ nghẽn hẻm'],
+                    ['licensed', 'Cấp Phép', '+Thu phí · PCCC 100%'],
+                  ] as [SidewalkPolicy, string, string][]
+                ).map(([pol, label, sub]) => {
+                  const currentPol =
+                    policies.sidewalkPolicy ??
+                    (policies.allowSidewalkEconomy ? 'informal' : 'ban');
+                  const active = currentPol === pol;
+                  return (
+                    <button
+                      key={pol}
+                      type="button"
+                      data-testid={`btn-sidewalk-${pol}`}
+                      onClick={() => {
+                        onUpdatePolicy('sidewalkPolicy', pol);
+                        onUpdatePolicy('allowSidewalkEconomy', pol !== 'ban');
+                      }}
+                      className={`p-1.5 rounded text-center border cursor-pointer transition-colors ${
+                        active
+                          ? 'bg-amber-400 text-slate-950 border-amber-300 font-bold'
+                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                      }`}
+                    >
+                      <div className="text-[11px] leading-tight">{label}</div>
+                      <div
+                        className={`text-[9.5px] ${
+                          active ? 'text-slate-900' : 'text-slate-400'
+                        }`}
+                      >
+                        {sub}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-700/60">
+              <div>
+                <div className="text-slate-200 font-medium">
+                  Cấm xe tải đi vào Khu dân cư &amp; Hẻm
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Xe tải 3D tự động né hẻm nhỏ &amp; đường sát nhà ở
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="btn-ban-trucks-res"
+                onClick={() => {
+                  const nextVal = !policies.banTrucksInResidential;
+                  onUpdatePolicy('banTrucksInResidential', nextVal);
+                  onUpdatePolicy('banPeakHeavyTrucks', nextVal);
+                }}
+                className={`px-2.5 py-1 rounded font-semibold cursor-pointer whitespace-nowrap ${
+                  policies.banTrucksInResidential
                     ? 'bg-emerald-500 text-slate-950'
                     : 'bg-slate-800 text-slate-300 border border-slate-600'
                 }`}
               >
-                {policies.banPeakHeavyTrucks ? 'Đang Cấm' : 'Cho Phép'}
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-slate-300">
-                Trợ giá Xe Bus & Xe ôm công nghệ
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  onUpdatePolicy(
-                    'subsidizeBusTransit',
-                    !policies.subsidizeBusTransit
-                  )
-                }
-                className={`px-2.5 py-1 rounded font-semibold cursor-pointer whitespace-nowrap ${
-                  policies.subsidizeBusTransit
-                    ? 'bg-sky-400 text-slate-950'
-                    : 'bg-slate-800 text-slate-300 border border-slate-600'
-                }`}
-              >
-                {policies.subsidizeBusTransit ? 'Đang Trợ Giá' : 'Tắt'}
+                {policies.banTrucksInResidential ? 'Đang Cấm' : 'Cho Phép'}
               </button>
             </div>
           </div>
 
-          {/* Column 2: Kinh tế Vỉa hè & PCCC Ngõ hẻm */}
-          <div className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2.5">
-            <div className="font-semibold text-amber-200">
-              Kinh Tế Vỉa Hè & Tiếp Cận PCCC Hẻm Nhỏ
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-slate-300">Chính sách Hàng quán Vỉa hè</span>
-              <button
-                type="button"
-                onClick={() =>
-                  onUpdatePolicy(
-                    'allowSidewalkEconomy',
-                    !policies.allowSidewalkEconomy
-                  )
-                }
-                className={`px-2.5 py-1 rounded font-semibold cursor-pointer whitespace-nowrap ${
-                  policies.allowSidewalkEconomy
-                    ? 'bg-amber-400 text-slate-950'
-                    : 'bg-rose-500 text-white'
-                }`}
-              >
-                {policies.allowSidewalkEconomy
-                  ? 'Cho Phép Kinh Doanh'
-                  : 'Cấm Dừng Đỗ / Dẹp Vỉa Hè'}
-              </button>
-            </div>
-
-            <p className="text-[11px] text-slate-300 leading-relaxed">
-              {policies.allowSidewalkEconomy
-                ? 'Hàng quán vỉa hè tạo sinh kế cho lao động phổ thông và tăng độ hạnh phúc, nhưng gây lấn chiếm lòng đường.'
-                : 'Cấm dừng đỗ giúp đường thông hè thoáng và tăng giá đất, nhưng giảm thu nhập tiểu thương.'}
-            </p>
-
-            <div className="pt-1 border-t border-slate-700/60 flex justify-between text-[11px]">
-              <span className="text-slate-300">
-                Độ phủ xe Cứu hỏa / Cứu thương:
-              </span>
-              <span className="font-mono tabular-nums font-bold text-amber-300">
-                {metrics.emergencyAccessCoverage}%
-              </span>
-            </div>
-          </div>
-
-          {/* Column 3: Chuỗi cung ứng Logistics & Sự kiện Showbiz */}
-          <div className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2">
+          {/* Column 3: An ninh Lương thực (foodSupplyPercent) & Sự kiện Showbiz */}
+          <div
+            data-testid="traffic-col-food-showbiz"
+            className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2"
+          >
             <div className="font-semibold text-amber-200 flex justify-between">
-              <span>Logistics &amp; Công Nghiệp Showbiz [J]</span>
+              <span>An Ninh Lương Thực &amp; Showbiz [J]</span>
               <span className="font-mono tabular-nums text-emerald-300">
-                Chuỗi cung ứng {metrics.supplyChainIndex}%
+                Cung ứng {metrics.supplyChainIndex}%
               </span>
             </div>
 
-            <p className="text-[11px] text-slate-300">
-              Luồng hàng: Nông sản &amp; Cảng biển → Chợ đầu mối → Siêu thị bán lẻ.
-              Ngập lụt ({metrics.floodedTileCount} ô) hoặc kẹt xe sẽ làm đứt chuỗi
-              cung ứng.
-            </p>
+            <div
+              data-testid="food-supply-indicator"
+              className={`rounded-lg px-2.5 py-1.5 border flex items-center justify-between ${
+                (metrics.foodSupplyPercent ?? 100) < 100
+                  ? 'bg-rose-950/60 border-rose-500/50 text-rose-200'
+                  : 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+              }`}
+            >
+              <div>
+                <div className="text-[11px] font-bold">
+                  Nguồn cung Lương thực (agr_farm):
+                </div>
+                <div className="text-[10px] opacity-85">
+                  Mỗi Nông trại nuôi tối đa 180 dân
+                </div>
+              </div>
+              <span className="text-sm font-mono tabular-nums font-extrabold">
+                {metrics.foodSupplyPercent ?? 100}%
+              </span>
+            </div>
 
             <button
               type="button"

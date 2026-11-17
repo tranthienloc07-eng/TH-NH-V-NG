@@ -9,6 +9,7 @@ import {
   EXPANSION_POP_TARGET,
   EXPANSION_TREASURY_TARGET,
   formatVnd,
+  getDifficultySpec,
   getRegionName,
   hasNeighborOfType,
   isBuiltStructure,
@@ -18,7 +19,6 @@ import {
   MAX_DAY_TICK_MS,
   MIN_DAY_TICK_MS,
   REGION_GRID_SIZE,
-  STARTING_TREASURY,
   TILE_LABELS,
 } from './constants';
 import {
@@ -33,12 +33,145 @@ import {
   AdvisorBriefing,
   AdvisorRecommendation,
   CityGameState,
+  DifficultyLevel,
   GameStateMode,
+  MacroMetrics,
   MacroPolicies,
   MonthlyCitEntry,
+  RunSnapshot,
   SeasonType,
   TileData,
 } from './types';
+
+export const VICTORY_POP_TARGET = 1200;
+export const VICTORY_PCI_TARGET = 75;
+export const VICTORY_MIN_REGIONS = 2;
+
+/**
+ * Tổng hợp dân số, việc làm và thu/chi hàng tháng trên toàn bộ các vùng đã mở khóa (state.unlockedRegions)
+ */
+export function aggregateUnlockedRegionsMetrics(
+  regionGrids: Record<string, TileData[][]>,
+  unlockedRegions: string[],
+  activeRegionKey: string,
+  activeMetrics: MacroMetrics,
+  policies: MacroPolicies,
+  season: SeasonType,
+  activeConcertMonths: number,
+  treasury: number,
+  crisisMonthsElapsed: number,
+  difficulty: DifficultyLevel = 'hard'
+): MacroMetrics {
+  if (!unlockedRegions || unlockedRegions.length <= 1) {
+    return activeMetrics;
+  }
+
+  let totalPop = activeMetrics.population;
+  let totalHousing = activeMetrics.housingCapacity;
+  let totalRevenue = activeMetrics.monthlyRevenue;
+  let totalExpense = activeMetrics.monthlyExpense;
+  let totalNet = activeMetrics.netBalance;
+  let bestRegionalPci = activeMetrics.pci;
+
+  const labor = { ...activeMetrics.labor };
+
+  for (const regKey of unlockedRegions) {
+    if (regKey === activeRegionKey) continue;
+    const otherGrid = regionGrids[regKey];
+    if (!otherGrid) continue;
+    const m = calculateMacroEconomy(
+      otherGrid,
+      policies,
+      season,
+      activeConcertMonths,
+      treasury,
+      crisisMonthsElapsed,
+      difficulty
+    );
+    totalPop += m.population;
+    totalHousing += m.housingCapacity;
+    totalRevenue = Number((totalRevenue + m.monthlyRevenue).toFixed(4));
+    totalExpense = Number((totalExpense + m.monthlyExpense).toFixed(4));
+    totalNet = Number((totalNet + m.netBalance).toFixed(4));
+    bestRegionalPci = Math.max(bestRegionalPci, m.pci);
+
+    labor.unskilled += m.labor.unskilled;
+    labor.skilled += m.labor.skilled;
+    labor.educated += m.labor.educated;
+    labor.employedUnskilled += m.labor.employedUnskilled;
+    labor.employedSkilled += m.labor.employedSkilled;
+    labor.employedEducated += m.labor.employedEducated;
+    labor.totalJobSlots += m.labor.totalJobSlots;
+    labor.totalEmployed += m.labor.totalEmployed;
+    labor.housingCapacity += m.labor.housingCapacity;
+  }
+
+  return {
+    ...activeMetrics,
+    pci: bestRegionalPci,
+    population: totalPop,
+    housingCapacity: totalHousing,
+    monthlyRevenue: totalRevenue,
+    monthlyExpense: totalExpense,
+    netBalance: totalNet,
+    totalRegionalPopulation: totalPop,
+    totalRegionalJobs: labor.totalEmployed,
+    canExpandRegion:
+      totalPop >= EXPANSION_POP_TARGET && treasury >= EXPANSION_TREASURY_TARGET,
+    labor,
+  };
+}
+
+/**
+ * Kiểm tra điều kiện Chiến thắng: Tổng Dân số >= 1200, PCI >= 75, unlockedRegions.length >= 2
+ */
+export function evaluateVictoryOutcome(
+  metrics: MacroMetrics,
+  unlockedRegionsCount: number,
+  month: number,
+  year: number,
+  treasury: number,
+  endlessMode?: boolean
+): RunSnapshot | null {
+  if (endlessMode) return null;
+  if (
+    metrics.population >= VICTORY_POP_TARGET &&
+    metrics.pci >= VICTORY_PCI_TARGET &&
+    unlockedRegionsCount >= VICTORY_MIN_REGIONS
+  ) {
+    return {
+      outcome: 'victory',
+      reason: `Đại Đô Thị Thịnh Vượng: Đạt ${metrics.population.toLocaleString(
+        'vi-VN'
+      )} cư dân liên vùng, chỉ số PCI ${Math.round(
+        metrics.pci
+      )}/100 và mở rộng ${unlockedRegionsCount} vùng đô thị!`,
+      month,
+      year,
+      treasury,
+      population: metrics.population,
+      pci: metrics.pci,
+      socialStability: metrics.socialStability,
+    };
+  }
+  return null;
+}
+
+/**
+ * Cho phép người chơi nhấn "Tiếp Tục Chơi Endless" trên Victory Modal
+ */
+export function continueEndlessAfterVictory(
+  state: CityGameState
+): CityGameState {
+  return {
+    ...state,
+    mode: 'playing',
+    snapshot: null,
+    endlessMode: true,
+    lastEventBanner:
+      'Chế độ Endless đã kích hoạt! Hãy tiếp tục mở rộng toàn bộ 81 vùng đô thị 9x9.',
+  };
+}
 
 /**
  * Thực thi Tổ chức Đại Nhạc Hội Quốc Tế có kiểm tra điều kiện chống hack tiền đầu game
@@ -82,15 +215,29 @@ export function triggerShowbizConcert(state: CityGameState): {
     }))
   );
   const nextTreasury = Number((state.treasury + revenueAdded).toFixed(4));
-  const nextMetrics = calculateMacroEconomy(
+  const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+  const nextRegionGrids = { ...state.regionGrids, [regKey]: nextGrid };
+  const rawMetrics = calculateMacroEconomy(
     nextGrid,
     state.policies,
     state.season,
     3,
     nextTreasury,
-    state.crisisMonthsElapsed
+    state.crisisMonthsElapsed,
+    state.difficulty
   );
-  const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+  const nextMetrics = aggregateUnlockedRegionsMetrics(
+    nextRegionGrids,
+    state.unlockedRegions,
+    regKey,
+    rawMetrics,
+    state.policies,
+    state.season,
+    3,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
 
   return {
     nextState: {
@@ -98,7 +245,7 @@ export function triggerShowbizConcert(state: CityGameState): {
       activeConcertMonths: 3,
       treasury: nextTreasury,
       grid: nextGrid,
-      regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+      regionGrids: nextRegionGrids,
       metrics: nextMetrics,
       lastEventBanner: `ĐẠI NHẠC HỘI SHOWBIZ QUỐC TẾ: Thu +${formatVnd(revenueAdded, true)} thuế sự kiện từ ${check.readyStadiumCount} Tổ hợp Showbiz (kéo dài 3 tháng)!`,
     },
@@ -189,6 +336,7 @@ export function runImmigrationSystemStep(
       const nearRoad = hasNeighborOfType(grid, x, z, [
         'road_alley',
         'road_urban',
+        'road_ring',
         'road_highway',
       ]);
       if (!nearRoad) continue;
@@ -329,25 +477,32 @@ export function runCrisisEmigrationStep(
   return totalEmigrated;
 }
 
-export function createInitialGameState(startPlaying = false): CityGameState {
+export function createInitialGameState(
+  startPlaying = false,
+  difficulty: DifficultyLevel = 'hard'
+): CityGameState {
   const startKey = '4,4';
   const grid = createInitialGrid(0);
   const policies = createDefaultPolicies();
   const season: SeasonType = 'dry';
-  const startingTreasury = STARTING_TREASURY;
+  const diffSpec = getDifficultySpec(difficulty);
+  const startingTreasury = diffSpec.startingTreasury;
   const metrics = calculateMacroEconomy(
     grid,
     policies,
     season,
     0,
     startingTreasury,
-    0
+    0,
+    difficulty
   );
 
   GlobalLedger.length = 0;
 
   return {
     mode: startPlaying ? 'playing' : 'title',
+    difficulty,
+    endlessMode: false,
     day: 1,
     month: 1,
     year: 2026,
@@ -363,8 +518,7 @@ export function createInitialGameState(startPlaying = false): CityGameState {
     grid,
     policies,
     metrics,
-    lastEventBanner:
-      'Ngân sách khởi điểm 50 Tỷ VNĐ! Hãy xây Đường [1-3] trước, sau đó phân lô Nhà ở & Công trình sát đường để cư dân di cư vào thành phố.',
+    lastEventBanner: `Ngân sách khởi điểm ${startingTreasury} Tỷ VNĐ (${diffSpec.label})! Hãy xây Đường [1-3] trước, sau đó phân lô Nhà ở & Công trình sát đường để cư dân di cư vào thành phố.`,
     snapshot: null,
     isCrisis: false,
     crisisTimer: 0,
@@ -429,10 +583,16 @@ export function loadGameStateFromLocalStorage(): CityGameState | null {
     ) {
       return null;
     }
-    const base = createInitialGameState(true);
+    const base = createInitialGameState(true, parsed.difficulty ?? 'hard');
     return {
       ...base,
       ...parsed,
+      difficulty: parsed.difficulty ?? 'hard',
+      endlessMode: parsed.endlessMode ?? false,
+      policies: {
+        ...base.policies,
+        ...parsed.policies,
+      },
       cityLevel: parsed.cityLevel ?? 1,
       onboardingStep: parsed.onboardingStep ?? 1,
       onboardingCompleted: parsed.onboardingCompleted ?? false,
@@ -483,6 +643,8 @@ export function selectOrUnlockRegion(
     };
   }
 
+  const currentKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+  const syncedRegionGrids = { ...state.regionGrids, [currentKey]: state.grid };
   const targetKey = `${rx},${rz}`;
   const isAlreadyUnlocked = state.unlockedRegions.includes(targetKey);
 
@@ -502,46 +664,89 @@ export function selectOrUnlockRegion(
     const nextTreasury = Number(
       (state.treasury - EXPANSION_TREASURY_TARGET).toFixed(4)
     );
-    const nextMetrics = calculateMacroEconomy(
+    const nextUnlocked = [...state.unlockedRegions, targetKey];
+    const nextRegionGrids = { ...syncedRegionGrids, [targetKey]: newGrid };
+
+    const rawMetrics = calculateMacroEconomy(
       newGrid,
       state.policies,
       state.season,
       state.activeConcertMonths,
       nextTreasury,
-      state.crisisMonthsElapsed
+      state.crisisMonthsElapsed,
+      state.difficulty
+    );
+    const nextMetrics = aggregateUnlockedRegionsMetrics(
+      nextRegionGrids,
+      nextUnlocked,
+      targetKey,
+      rawMetrics,
+      state.policies,
+      state.season,
+      state.activeConcertMonths,
+      nextTreasury,
+      state.crisisMonthsElapsed,
+      state.difficulty
+    );
+
+    const victorySnap = evaluateVictoryOutcome(
+      nextMetrics,
+      nextUnlocked.length,
+      state.month,
+      state.year,
+      nextTreasury,
+      state.endlessMode
     );
 
     return {
       nextState: {
         ...state,
+        mode: victorySnap ? 'gameover' : state.mode,
+        snapshot: victorySnap ?? state.snapshot,
         treasury: nextTreasury,
         activeRegion: { rx, rz },
-        unlockedRegions: [...state.unlockedRegions, targetKey],
-        regionGrids: { ...state.regionGrids, [targetKey]: newGrid },
+        unlockedRegions: nextUnlocked,
+        regionGrids: nextRegionGrids,
         grid: newGrid,
         selectedTile: null,
         metrics: nextMetrics,
-        lastEventBanner: `Đã mở khóa vùng đô thị mới: ${getRegionName(rx, rz)} (-${EXPANSION_TREASURY_TARGET} Tỷ VNĐ)!`,
+        lastEventBanner: victorySnap
+          ? victorySnap.reason
+          : `Đã mở khóa vùng đô thị mới: ${getRegionName(rx, rz)} (-${EXPANSION_TREASURY_TARGET} Tỷ VNĐ)!`,
       },
       unlockedNew: true,
     };
   }
 
   const existingGrid =
-    state.regionGrids[targetKey] ?? createInitialGrid(rx * 11 + rz * 7);
-  const nextMetrics = calculateMacroEconomy(
+    syncedRegionGrids[targetKey] ?? createInitialGrid(rx * 11 + rz * 7);
+  const rawMetrics = calculateMacroEconomy(
     existingGrid,
     state.policies,
     state.season,
     state.activeConcertMonths,
     state.treasury,
-    state.crisisMonthsElapsed
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+  const nextMetrics = aggregateUnlockedRegionsMetrics(
+    syncedRegionGrids,
+    state.unlockedRegions,
+    targetKey,
+    rawMetrics,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    state.treasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
   );
 
   return {
     nextState: {
       ...state,
       activeRegion: { rx, rz },
+      regionGrids: syncedRegionGrids,
       grid: existingGrid,
       selectedTile: null,
       metrics: nextMetrics,
@@ -575,23 +780,37 @@ export function stepSimulationDay(state: CityGameState): CityGameState {
 
   const nextDay = state.day + 1;
   const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+  const nextRegionGrids = { ...state.regionGrids, [regKey]: nextGrid };
 
   if (nextDay > 30) {
     return stepSimulationMonth({
       ...state,
       day: 1,
       grid: nextGrid,
-      regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+      regionGrids: nextRegionGrids,
     });
   }
 
-  const nextMetrics = calculateMacroEconomy(
+  const rawMetrics = calculateMacroEconomy(
     nextGrid,
     state.policies,
     state.season,
     state.activeConcertMonths,
     state.treasury,
-    state.crisisMonthsElapsed
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+  const nextMetrics = aggregateUnlockedRegionsMetrics(
+    nextRegionGrids,
+    state.unlockedRegions,
+    regKey,
+    rawMetrics,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    state.treasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
   );
 
   const prevLevel = state.cityLevel ?? 1;
@@ -619,18 +838,29 @@ export function stepSimulationDay(state: CityGameState): CityGameState {
     banner = `Di cư tự nhiên: +${newImmigrants} người dân mới vừa dọn vào thành phố (Tổng dân số: ${nextMetrics.population.toLocaleString('vi-VN')} / ${nextMetrics.housingCapacity.toLocaleString('vi-VN')} chỗ ở).`;
   }
 
+  const victorySnap = evaluateVictoryOutcome(
+    nextMetrics,
+    state.unlockedRegions.length,
+    state.month,
+    state.year,
+    state.treasury,
+    state.endlessMode
+  );
+
   const nextState: CityGameState = {
     ...state,
+    mode: victorySnap ? 'gameover' : state.mode,
+    snapshot: victorySnap ?? state.snapshot,
     day: nextDay,
     bestPci: Math.max(state.bestPci, nextMetrics.pci),
     grid: nextGrid,
-    regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+    regionGrids: nextRegionGrids,
     metrics: nextMetrics,
     cityLevel: nextCityLevel,
     onboardingStep: obEval.onboardingStep,
     onboardingCompleted: obEval.onboardingCompleted,
     completedQuests: obEval.completedQuests,
-    lastEventBanner: banner,
+    lastEventBanner: victorySnap ? victorySnap.reason : banner,
   };
 
   const savedAt = saveGameStateToLocalStorage(nextState);
@@ -699,13 +929,29 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     }
   }
 
-  const preMetrics = calculateMacroEconomy(
+  const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+  const tempRegionGrids = { ...state.regionGrids, [regKey]: nextGrid };
+
+  const rawPreMetrics = calculateMacroEconomy(
     nextGrid,
     state.policies,
     nextSeason,
     nextConcertMonths,
     state.treasury,
-    state.crisisMonthsElapsed
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+  const preMetrics = aggregateUnlockedRegionsMetrics(
+    tempRegionGrids,
+    state.unlockedRegions,
+    regKey,
+    rawPreMetrics,
+    state.policies,
+    nextSeason,
+    nextConcertMonths,
+    state.treasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
   );
 
   const fdiBonus =
@@ -726,7 +972,8 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     state.season,
     nextTreasury,
     fdiBonus,
-    state.activeConcertMonths
+    state.activeConcertMonths,
+    state.difficulty
   );
   const existingLedger = (state.globalLedger ?? []).filter(
     (e) => e.id !== settlementEntry.id
@@ -791,21 +1038,37 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
       nextConsecutiveNegBudget >= 2;
 
     if (shouldTriggerCrisis) {
+      const initialTimer = getDifficultySpec(
+        state.difficulty
+      ).initialCrisisTimer;
       nextIsCrisis = true;
-      nextCrisisTimer = 3;
+      nextCrisisTimer = initialTimer;
       nextCrisisMonthsElapsed = 0;
-      banner =
-        'BÁO ĐỘNG KHỦNG HOẢNG (CrisisTimer = 3 tháng): Hạnh phúc < 30%, An sinh < 20% hoặc Ngân sách âm 2 tháng liên tiếp! Mỗi tháng tiếp theo PCI -5 điểm & Di cư +10%. Hãy tăng Trợ cấp An sinh, giảm Thuế PIT hoặc chọn Đền bù Cao 135% để đưa Hạnh phúc > 40%!';
+      banner = `BÁO ĐỘNG KHỦNG HOẢNG (CrisisTimer = ${initialTimer} tháng): Hạnh phúc < 30%, An sinh < 20% hoặc Ngân sách âm 2 tháng liên tiếp! Mỗi tháng tiếp theo PCI -5 điểm & Di cư +10%. Hãy tăng Trợ cấp An sinh, giảm Thuế PIT hoặc chọn Đền bù Cao 135% để đưa Hạnh phúc > 40%!`;
     }
   }
 
-  const nextMetrics = calculateMacroEconomy(
+  const nextRegionGrids = { ...state.regionGrids, [regKey]: nextGrid };
+  const rawNextMetrics = calculateMacroEconomy(
     nextGrid,
     state.policies,
     nextSeason,
     nextConcertMonths,
     nextTreasury,
-    nextCrisisMonthsElapsed
+    nextCrisisMonthsElapsed,
+    state.difficulty
+  );
+  const nextMetrics = aggregateUnlockedRegionsMetrics(
+    nextRegionGrids,
+    state.unlockedRegions,
+    regKey,
+    rawNextMetrics,
+    state.policies,
+    nextSeason,
+    nextConcertMonths,
+    nextTreasury,
+    nextCrisisMonthsElapsed,
+    state.difficulty
   );
 
   const prevLevel = state.cityLevel ?? 1;
@@ -844,8 +1107,16 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
         nextMetrics,
         nextMonth,
         nextYear,
-        nextConcertMonths
+        nextConcertMonths,
+        state.difficulty
       );
+      if (tile.constructionRemainingDays === 0) {
+        if (rep.economicEfficiencyPercent < 50) {
+          tile.lowEfficiencyMonths = (tile.lowEfficiencyMonths ?? 0) + 1;
+        } else {
+          tile.lowEfficiencyMonths = 0;
+        }
+      }
       const entry: MonthlyCitEntry = {
         monthLabel: `T${nextMonth}/${nextYear}`,
         seasonLabel: seasonName,
@@ -872,10 +1143,23 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
       pci: nextMetrics.pci,
       socialStability: nextMetrics.socialStability,
     };
+  } else {
+    const victorySnap = evaluateVictoryOutcome(
+      nextMetrics,
+      state.unlockedRegions.length,
+      nextMonth,
+      nextYear,
+      nextTreasury,
+      state.endlessMode
+    );
+    if (victorySnap) {
+      nextMode = 'gameover';
+      snapshot = victorySnap;
+      banner = victorySnap.reason;
+    }
   }
 
   const nextBestPci = Math.max(state.bestPci, nextMetrics.pci);
-  const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
 
   const nextState: CityGameState = {
     ...state,
@@ -888,7 +1172,7 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     season: nextSeason,
     activeConcertMonths: nextConcertMonths,
     grid: nextGrid,
-    regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+    regionGrids: nextRegionGrids,
     metrics: nextMetrics,
     globalLedger: nextGlobalLedger,
     latestSettlementReport: settlementEntry,
@@ -967,17 +1251,29 @@ export function generateCityAdvisorBriefing(
   let indCount = 0;
   let pubWelfareCount = 0;
   let privServiceCount = 0;
+  const chronicLowEfficiencyBuildings: string[] = [];
 
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
-      const t = grid[z][x].type;
+      const tile = grid[z][x];
+      const t = tile.type;
       if (isRoadTile(t)) roadCount++;
       else if (isResidentialTile(t)) {
         resCount++;
         if (t === 'res_high') resHighCount++;
-      } else if (t === 'com_market' || t === 'com_mall' || t === 'com_street') {
+      } else if (
+        t === 'com_market' ||
+        t === 'com_mall' ||
+        t === 'com_street' ||
+        t === 'com_office'
+      ) {
         comCount++;
-      } else if (t === 'ind_factory' || t === 'ind_fdi' || t === 'agr_farm') {
+      } else if (
+        t === 'ind_factory' ||
+        t === 'ind_food' ||
+        t === 'ind_fdi' ||
+        t === 'agr_farm'
+      ) {
         indCount++;
       } else if (
         t === 'pub_hospital' ||
@@ -988,17 +1284,39 @@ export function generateCityAdvisorBriefing(
       } else if (t === 'priv_hospital' || t === 'priv_school') {
         privServiceCount++;
       }
+
+      const spec = BUILDING_SPECS[t];
+      if (
+        spec &&
+        spec.baseGrossOutputBillion > 0 &&
+        (tile.lowEfficiencyMonths ?? 0) >= 2
+      ) {
+        const label =
+          tile.customName ?? `${TILE_LABELS[t]} (${x + 1},${z + 1})`;
+        chronicLowEfficiencyBuildings.push(
+          `${label} (${tile.lowEfficiencyMonths} tháng <50%)`
+        );
+      }
     }
   }
 
   let healthGrade: AdvisorBriefing['healthGrade'] = 'B';
   if (state.isCrisis) {
     healthGrade = 'Crisis';
-  } else if (netIncome >= 0.5 && metrics.happiness >= 75 && metrics.pci >= 65) {
+  } else if (
+    netIncome >= 0.5 &&
+    metrics.happiness >= 75 &&
+    metrics.pci >= 65 &&
+    chronicLowEfficiencyBuildings.length === 0
+  ) {
     healthGrade = 'A';
   } else if (netIncome < 0 || treasury < 5 || metrics.happiness < 45) {
     healthGrade = 'D';
-  } else if (netIncome < 0.1 || metrics.staffShortageBuildings > 0) {
+  } else if (
+    netIncome < 0.1 ||
+    metrics.staffShortageBuildings > 0 ||
+    chronicLowEfficiencyBuildings.length > 0
+  ) {
     healthGrade = 'C';
   }
 
@@ -1033,6 +1351,27 @@ export function generateCityAdvisorBriefing(
       actionType: 'adjust_policy',
       policyKey: 'welfareLevel',
       policyValue: Math.max(75, policies.welfareLevel),
+    });
+  }
+
+  if (chronicLowEfficiencyBuildings.length > 0) {
+    diagnostics.push(
+      `Cảnh báo Hiệu suất thấp (<50% từ 2 tháng liên tiếp): ${chronicLowEfficiencyBuildings
+        .slice(0, 2)
+        .join(', ')}. Đang gây thất thu CIT và gánh nặng phí duy trì!`
+    );
+    recommendations.push({
+      id: 'rec_low_efficiency_alert',
+      priority: 'urgent',
+      title: `Khắc Phục ${chronicLowEfficiencyBuildings.length} Công Trình Dưới 50% Công Suất`,
+      analysis: `Các cơ sở (${chronicLowEfficiencyBuildings
+        .slice(0, 2)
+        .join(
+          ', '
+        )}) thiếu nhân sự hoặc kẹt chuỗi cung ứng ≥ 2 tháng. Hãy bổ sung nhà ở phù hợp hoặc nâng cấp giao thông Vành đai.`,
+      actionLabel: resHighCount === 0 ? 'Xây Chung Cư [5]' : 'Mở Vành Đai [K]',
+      actionType: 'select_tool',
+      toolId: resHighCount === 0 ? 'res_mid' : 'road_ring',
     });
   }
 

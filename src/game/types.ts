@@ -31,8 +31,10 @@ export type TileType =
   | 'com_street'       // Hàng quán nhỏ lẻ & Shophouse mặt tiền
   | 'com_market'       // Chợ truyền thống
   | 'com_mall'         // Siêu thị & Trung tâm thương mại lớn
-  | 'agr_farm'         // Nông lâm nghiệp & Thủy hải sản
-  | 'ind_factory'      // Nhà máy sản xuất công nghiệp
+  | 'com_office'       // Văn phòng Tài chính (18 Tỷ, Upkeep 0.3 Tỷ, cần lao động educated cao, sinh CIT/PIT lớn khi PCI >= 65)
+  | 'agr_farm'         // Nông lâm nghiệp & Thủy hải sản (Nuôi 180 dân/nông trại)
+  | 'ind_food'         // Xưởng Chế biến Thực phẩm (4.5 Tỷ, Upkeep 0.1 Tỷ, nhận bonus từ agr_farm)
+  | 'ind_factory'      // Nhà máy sản xuất công nghiệp (Gây ô nhiễm bán kính 2 ô giảm -4 Hạnh phúc mỗi ô dân cư)
   | 'ind_fdi'          // Khu công nghệ cao FDI
   | 'pub_admin'        // UBND & Trung tâm hành chính công
   | 'pub_hospital'     // Bệnh viện Công lập (Ngân sách nhà nước bù lỗ, đảm bảo an sinh tối đa)
@@ -45,6 +47,7 @@ export type TileType =
   | 'showbiz_stadium'  // Tổ hợp Sân vận động & Nhà hát Showbiz
   | 'road_alley'       // Đường đất / Đường hẻm nhỏ (5 - 10 Triệu VNĐ / ô)
   | 'road_urban'       // Đường nhựa nhỏ / đô thị (50 - 80 Triệu VNĐ / ô)
+  | 'road_ring'        // Đường Vành Đai (0.22 Tỷ / ô, Upkeep 0.01 Tỷ / ô / tháng, không nối trực tiếp road_alley)
   | 'road_highway'     // Quốc lộ / Cao tốc trên cao
   | 'gateway_port'     // Cảng biển quốc tế & Trung tâm Logistics
   | 'gateway_station'; // Ga tàu hỏa & Sân bay liên vùng
@@ -57,7 +60,9 @@ export type ToolId =
   | 'com_street'
   | 'com_market'
   | 'com_mall'
+  | 'com_office'
   | 'agr_farm'
+  | 'ind_food'
   | 'ind_factory'
   | 'ind_fdi'
   | 'pub_admin'
@@ -71,11 +76,18 @@ export type ToolId =
   | 'showbiz_stadium'
   | 'road_alley'
   | 'road_urban'
+  | 'road_ring'
   | 'road_highway'
   | 'sub_drainage'     // Hệ thống cống ngầm thoát nước chống ngập (1 - 2 ngày)
   | 'act_clearance';   // Đền bù giải tỏa mặt bằng (Land Clearance)
 
 export type CompensationLevel = 'low' | 'fair' | 'generous';
+
+export type DifficultyLevel = 'easy' | 'hard' | 'expert';
+
+export type TransitLevel = 0 | 1 | 2;
+
+export type SidewalkPolicy = 'ban' | 'informal' | 'licensed';
 
 export interface RoadConnections {
   north: boolean;
@@ -174,6 +186,8 @@ export interface TileData {
   assignedWorkers: LaborTierCounts;  // Nhân sự thực tế đã tìm được việc tại công trình này
   junctionType?: RoadJunctionType;   // Loại nút giao đường bộ tự động bắt dính (Snapping)
   citHistory?: MonthlyCitEntry[];    // Lịch sử doanh thu Thuế TNDN (CIT) theo từng tháng của công trình
+  lowEfficiencyMonths?: number;      // Số tháng liên tiếp công trình kinh tế chạy < 50% công suất
+  localSupplyIndex?: number;         // Chỉ số chuỗi cung ứng cục bộ bán kính 5 ô (0 - 100%, không cộng dồn khi đặt cạnh nhau)
 }
 
 export interface TileDetailedReport {
@@ -221,6 +235,7 @@ export interface TileDetailedReport {
   publicServiceBadgeLabel?: string;       // Nhãn công suất góc phải cột 2 (thay cho "Hiệu suất 0%")
   publicServiceSummaryLabel?: string;     // Nhãn công suất phục vụ chính (ví dụ: "Phục vụ: X/Y công trình · Tải Z%" hoặc "Hiệu lực thu thuế: 100% (Chống thất thoát)")
   publicServiceDetailLabel?: string;      // Mô tả hiệu ứng công ích của công trình công
+  localSupplyIndex?: number;              // Chỉ số cung ứng cục bộ bán kính 5 ô (0 - 100%)
 }
 
 export interface MacroPolicies {
@@ -240,11 +255,16 @@ export interface MacroPolicies {
   compensationLevel: CompensationLevel;
   welfareLevel: number; // Ngân sách trợ cấp người có công, giảm nghèo, thất nghiệp (0 - 100)
 
-  // Điều tiết Giao thông Vi mô & Đặc thù bản địa
-  greenLightMainRatio: number;   // Chu kỳ đèn xanh trục chính (30% - 75%)
-  allowSidewalkEconomy: boolean; // Cho phép hàng quán vỉa hè (Cấm dừng đỗ = false)
-  banPeakHeavyTrucks: boolean;   // Cấm xe tải nặng/container giờ cao điểm sáng/chiều
-  subsidizeBusTransit: boolean;  // Trợ giá tuyến xe Bus & điều phối xe ôm công nghệ
+  // Điều tiết Giao thông Vi mô & Đặc thù bản địa (tương thích ngược + nâng cấp Tab [G])
+  greenLightMainRatio: number;   // (Tương thích ngược) Chu kỳ đèn xanh trục chính
+  allowSidewalkEconomy: boolean; // (Tương thích ngược) Cho phép hàng quán vỉa hè
+  banPeakHeavyTrucks: boolean;   // (Tương thích ngược) Cấm xe tải nặng giờ cao điểm
+  subsidizeBusTransit: boolean;  // (Tương thích ngược) Trợ giá tuyến xe Bus
+
+  transitLevel?: TransitLevel;       // 0: Tự phát | 1: Bus Trợ giá (-0.15 Tỷ/th) | 2: BRT Nhanh (-0.4 Tỷ/th)
+  enableTollbooth?: boolean;         // Thu phí trạm BOT 30.000 VNĐ/lượt ô tô/tải trên đường chính để bù đắp upkeep đường
+  sidewalkPolicy?: SidewalkPolicy;   // 'ban' (Cấm vỉa hè) | 'informal' (Tự phát) | 'licensed' (Cấp phép thu phí vỉa hè, giữ PCCC 100%)
+  banTrucksInResidential?: boolean;  // Cấm xe tải đi vào đường hẻm & đường sát khu dân cư
 }
 
 export interface LaborBreakdown {
@@ -293,6 +313,43 @@ export interface MacroMetrics {
   isUtilityOverloaded?: boolean;        // Đang quá tải Điện/Nước (utilityLoadPercent > 100%)
   hasActivePublicAdmin?: boolean;       // Thành phố có UBND hoạt động đủ nhân sự hay không
   taxCollectionEfficiencyPercent?: number; // Hiệu lực thu thuế (100% khi có UBND đủ nhân sự, 88% khi thất thoát 12%)
+  foodSupplyPercent?: number;           // Tỷ lệ tự chủ lương thực từ agr_farm (180 dân / nông trại)
+  foodCapacityPop?: number;             // Sức nuôi tối đa của các agr_farm đang hoạt động
+  tollboothRevenue?: number;            // Doanh thu trạm thu phí BOT bù đắp phí bảo trì đường (Tỷ/tháng)
+  transitUpkeep?: number;               // Chi phí trợ giá Bus / BRT (Tỷ/tháng)
+  sidewalkLicenseRevenue?: number;      // Phí cấp phép kinh doanh vỉa hè có trật tự (Tỷ/tháng)
+  pollutionPenaltyHappiness?: number;   // Điểm trừ Hạnh phúc do ô nhiễm từ ind_factory gần khu dân cư
+  totalRegionalPopulation?: number;     // Tổng dân số gộp trên toàn bộ các vùng đã mở khóa
+  totalRegionalJobs?: number;           // Tổng việc làm gộp trên toàn bộ các vùng đã mở khóa
+}
+
+export interface BuildingFinancialPreview {
+  costBillion: number;
+  costLabel: string;
+  upkeepBillion: number;
+  upkeepLabel: string;
+  requiredWorkersTotal: number;
+  workersLabel: string;
+  expectedMonthlyTaxOrOutputBillion: number;
+  expectedTaxOrOutputLabel: string;
+  paybackMonths: number | null;
+  paybackLabel: string;
+  isPublicInvestment: boolean;
+}
+
+export interface PlacementRiskEvaluation {
+  hasRisk: boolean;
+  missingWorkersTotal: number;
+  missingByTier: LaborTierCounts;
+  expectedMonthlyUpkeep: number;
+  expectedMonthlyRevenueContribution: number;
+  expectedMonthlyNetDeficit: number;
+  upkeepToRevenuePercent: number;
+  isWorkerShortageRisk: boolean;
+  isUpkeepOverThresholdRisk: boolean;
+  reasons: string[];
+  warningTitle: string;
+  warningMessage: string;
 }
 
 export interface ToolMetadata {
@@ -350,6 +407,8 @@ export interface OnboardingQuestSpec {
 
 export interface CityGameState {
   mode: GameStateMode;
+  difficulty: DifficultyLevel; // Độ khó: 'easy' (80 Tỷ, -20% Upkeep) | 'hard' (50 Tỷ Chuẩn) | 'expert' (32 Tỷ, +30% giải tỏa, crisisTimer=2)
+  endlessMode?: boolean;       // Đã chọn "Tiếp tục chơi Endless" sau khi đạt Chiến thắng
   day: number;      // Ngày trong tháng (1..30), mỗi chu kỳ 5-8 giây thực tế tăng 1 ngày
   month: number;
   year: number;
@@ -420,7 +479,7 @@ export interface AdvisorRecommendation {
   actionType: 'select_tool' | 'adjust_policy' | 'open_drawer';
   toolId?: ToolId;
   policyKey?: keyof MacroPolicies;
-  policyValue?: number | boolean | CompensationLevel;
+  policyValue?: number | boolean | CompensationLevel | TransitLevel | SidewalkPolicy;
   drawerTab?: 'economy' | 'traffic';
 }
 

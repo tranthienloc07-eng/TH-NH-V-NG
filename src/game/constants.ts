@@ -1,6 +1,8 @@
 import {
+  BuildingFinancialPreview,
   CityLevel,
   CityLevelSpec,
+  DifficultyLevel,
   LaborTierCounts,
   MacroPolicies,
   OnboardingQuestSpec,
@@ -25,6 +27,54 @@ export const BASE_EMPTY_LAND_PRICE = 0.0008; // 800.000 VNĐ / ô đất hoang
 export const BASE_MARSH_LAND_PRICE = 0.0005; // 500.000 VNĐ / ô đất trũng nông nghiệp
 export const EXPANSION_POP_TARGET = 1200;
 export const EXPANSION_TREASURY_TARGET = 10;
+
+export interface DifficultySpecification {
+  id: DifficultyLevel;
+  label: string;
+  shortLabel: string;
+  startingTreasury: number;
+  upkeepMultiplier: number;
+  clearanceCostMultiplier: number;
+  initialCrisisTimer: number;
+  description: string;
+}
+
+export const DIFFICULTY_SPECS: Record<DifficultyLevel, DifficultySpecification> = {
+  easy: {
+    id: 'easy',
+    label: 'Dễ (80 Tỷ · -20% Upkeep)',
+    shortLabel: 'Dễ',
+    startingTreasury: 80,
+    upkeepMultiplier: 0.8,
+    clearanceCostMultiplier: 1.0,
+    initialCrisisTimer: 3,
+    description: 'Ngân sách khởi điểm 80 Tỷ VNĐ, giảm 20% phí duy trì hàng tháng cho mọi công trình và hạ tầng.',
+  },
+  hard: {
+    id: 'hard',
+    label: 'Chuẩn (50 Tỷ · Cân Bằng)',
+    shortLabel: 'Chuẩn',
+    startingTreasury: 50,
+    upkeepMultiplier: 1.0,
+    clearanceCostMultiplier: 1.0,
+    initialCrisisTimer: 3,
+    description: 'Ngân sách khởi điểm chuẩn 50 Tỷ VNĐ, chi phí duy trì và đền bù giải tỏa ở mức tiêu chuẩn.',
+  },
+  expert: {
+    id: 'expert',
+    label: 'Chuyên Gia (32 Tỷ · +30% Giải Tỏa · Ân Hạn 2 Tháng)',
+    shortLabel: 'Chuyên Gia',
+    startingTreasury: 32,
+    upkeepMultiplier: 1.0,
+    clearanceCostMultiplier: 1.3,
+    initialCrisisTimer: 2,
+    description: 'Ngân sách khởi điểm 32 Tỷ VNĐ, phí đền bù giải tỏa +30%, thời gian ân hạn khủng hoảng rút ngắn còn 2 tháng.',
+  },
+};
+
+export function getDifficultySpec(difficulty: DifficultyLevel = 'hard'): DifficultySpecification {
+  return DIFFICULTY_SPECS[difficulty] ?? DIFFICULTY_SPECS.hard;
+}
 
 // Chu kỳ thời gian thực tế: Kéo giãn từ 1s/ngày lên 5-8 giây/ngày (Mặc định 6000ms = 6 giây/ngày)
 export const MIN_DAY_TICK_MS = 5000;
@@ -89,6 +139,16 @@ export const BUILDING_SPECS: Record<TileType, BuildingSpecification> = {
     requiredWorkers: { unskilled: 0, skilled: 0, educated: 0 },
     baseGrossOutputBillion: 0,
     maintenanceBillion: 0.005,
+  },
+  // Đường Vành Đai: 220 Triệu VNĐ / ô (0.22 Tỷ), Upkeep 0.01 Tỷ / ô / tháng, không nối trực tiếp road_alley
+  road_ring: {
+    costBillion: 0.22,
+    constructionDays: 1,
+    maxCapacity: 0,
+    minimumWealthLevel: 'low',
+    requiredWorkers: { unskilled: 0, skilled: 0, educated: 0 },
+    baseGrossOutputBillion: 0,
+    maintenanceBillion: 0.01,
   },
   // Cao tốc / Quốc lộ: 450 Triệu VNĐ / ô, hoàn thiện trong 2 ngày
   road_highway: {
@@ -160,7 +220,17 @@ export const BUILDING_SPECS: Record<TileType, BuildingSpecification> = {
     baseGrossOutputBillion: 18,
     maintenanceBillion: 0.25,
   },
-  // Nông lâm thủy sản: Công trình nhỏ hoàn thiện 1 ngày, cần 20 nhân sự
+  // Văn phòng Tài chính: Giá 18 Tỷ, Upkeep 0.3 Tỷ, cần lao động educated cao, sinh CIT/PIT lớn khi PCI >= 65
+  com_office: {
+    costBillion: 18,
+    constructionDays: 4,
+    maxCapacity: 0,
+    minimumWealthLevel: 'high',
+    requiredWorkers: { unskilled: 2, skilled: 13, educated: 25 }, // 40 nhân sự (25 chuyên gia tài chính)
+    baseGrossOutputBillion: 24,
+    maintenanceBillion: 0.3,
+  },
+  // Nông lâm thủy sản: Công trình nhỏ hoàn thiện 1 ngày, cần 20 nhân sự, nuôi tối đa 180 dân
   agr_farm: {
     costBillion: 0.65,
     constructionDays: 1,
@@ -170,7 +240,17 @@ export const BUILDING_SPECS: Record<TileType, BuildingSpecification> = {
     baseGrossOutputBillion: 4.2,
     maintenanceBillion: 0.03,
   },
-  // Nhà máy sản xuất: Cần 40 nhân sự, hoàn thiện 3 ngày
+  // Xưởng Chế biến Thực phẩm: Giá 4.5 Tỷ, Upkeep 0.1 Tỷ, nhận bonus từ agr_farm
+  ind_food: {
+    costBillion: 4.5,
+    constructionDays: 2,
+    maxCapacity: 0,
+    minimumWealthLevel: 'low',
+    requiredWorkers: { unskilled: 18, skilled: 9, educated: 3 }, // 30 nhân sự
+    baseGrossOutputBillion: 9.2,
+    maintenanceBillion: 0.1,
+  },
+  // Nhà máy sản xuất: Cần 40 nhân sự, hoàn thiện 3 ngày (Gây ô nhiễm bán kính 2 ô giảm -4 Hạnh phúc mỗi ô dân cư)
   ind_factory: {
     costBillion: 9.5,
     constructionDays: 3,
@@ -356,6 +436,19 @@ export const TOOLS: ToolMetadata[] = [
       'Đường nhựa đô thị giá 65 Triệu VNĐ/ô, hoàn thiện trong 1 ngày. Tự động nhận diện đường lân cận để tạo ngã ba chữ T (T-junction) hoặc ngã tư (Cross-intersection).',
   },
   {
+    id: 'road_ring',
+    name: 'Đường Vành Đai Đô Thị (220 Triệu/ô · 1 Ngày)',
+    shortName: 'Đường Vành Đai',
+    category: 'road',
+    cost: BUILDING_SPECS.road_ring.costBillion,
+    constructionDays: BUILDING_SPECS.road_ring.constructionDays,
+    keyHint: 'K',
+    roleClue: 'Đại lộ Vành Đai · Chỉ nối Đường Nhựa/Cao Tốc · +Chuỗi cung ứng',
+    prerequisiteLabel: 'Đặt tự do hoặc bắc cầu · Không nối trực tiếp Đường Hẻm [1]',
+    description:
+      'Trục đại lộ vành đai phân luồng xe tải và tăng chỉ số cung ứng cục bộ (Local Supply). Chỉ kết nối với Đường Vành Đai, Đường Nhựa Đô Thị và Cao Tốc — tuyệt đối không đấu nối trực tiếp với Đường Hẻm nhỏ.',
+  },
+  {
     id: 'road_highway',
     name: 'Cao Tốc Trên Cao (450 Triệu/ô · 2 Ngày)',
     shortName: 'Cao Tốc',
@@ -402,10 +495,10 @@ export const TOOLS: ToolMetadata[] = [
     cost: BUILDING_SPECS.res_high.costBillion,
     constructionDays: BUILDING_SPECS.res_high.constructionDays,
     keyHint: '6',
-    roleClue: '0/600 người · Cần Đường Nhựa [2] / Cao Tốc [3]',
-    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa [2] hoặc Cao Tốc [3]',
+    roleClue: '0/600 người · Cần Đường Nhựa [2] / Vành Đai / Cao Tốc',
+    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa [2], Vành Đai [K] hoặc Cao Tốc [3]',
     description:
-      'Chung cư cao tầng (32 Tỷ VNĐ, MaxCapacity: 600 người). Yêu cầu đặt sát Đường Nhựa/Cao Tốc (không thể xây trong hẻm nhỏ) và chỉ cho phép Lao động trung cấp & Có bằng cấp sinh sống.',
+      'Chung cư cao tầng (32 Tỷ VNĐ, MaxCapacity: 600 người). Yêu cầu đặt sát Đường Nhựa/Vành Đai/Cao Tốc (không thể xây trong hẻm nhỏ) và chỉ cho phép Lao động trung cấp & Có bằng cấp sinh sống.',
   },
   {
     id: 'com_market',
@@ -429,22 +522,48 @@ export const TOOLS: ToolMetadata[] = [
     constructionDays: BUILDING_SPECS.com_mall.constructionDays,
     keyHint: '8',
     roleClue: 'Job Slots: 45 người · Cần Đường Nhựa [2] + Điện [I]',
-    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Cao Tốc + Thủy Lợi & Điện [I]',
+    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Vành Đai/Cao Tốc + Thủy Lợi & Điện [I]',
     description:
-      'Trung tâm thương mại hiện đại cần 45 nhân sự. Yêu cầu đặt sát Đường Nhựa/Cao Tốc và thành phố đã xây dựng Thủy Lợi & Điện [I].',
+      'Trung tâm thương mại hiện đại cần 45 nhân sự. Yêu cầu đặt sát Đường Nhựa/Vành Đai/Cao Tốc và thành phố đã xây dựng Thủy Lợi & Điện [I].',
+  },
+  {
+    id: 'com_office',
+    name: 'Văn Phòng Tài Chính (18 Tỷ · Cần 40 Nhân Sự · 4 Ngày)',
+    shortName: 'Văn Phòng TC',
+    category: 'zoning',
+    cost: BUILDING_SPECS.com_office.costBillion,
+    constructionDays: BUILDING_SPECS.com_office.constructionDays,
+    keyHint: 'X',
+    roleClue: '25 Trí thức · Thuế CIT/PIT đột biến khi PCI ≥ 65',
+    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Vành Đai/Cao Tốc + Điện [I]',
+    description:
+      'Cao ốc Văn phòng Tài chính & Ngân hàng cần 40 nhân sự chất lượng cao (25 lao động có bằng cấp). Mang lại nguồn thu CIT và PIT đột biến khi chỉ số PCI đạt từ 65 điểm trở lên.',
   },
   {
     id: 'agr_farm',
-    name: 'Nông Lâm & Thủy Hải Sản (Cần 20 Nhân Sự · 1 Ngày)',
+    name: 'Nông Lâm & Thủy Hải Sản (Nuôi 180 Dân · 20 Nhân Sự · 1 Ngày)',
     shortName: 'Nông Thủy Sản',
     category: 'zoning',
     cost: BUILDING_SPECS.agr_farm.costBillion,
     constructionDays: BUILDING_SPECS.agr_farm.constructionDays,
     keyHint: '9',
-    roleClue: 'Job Slots: 20 người · Hoàn thiện 1 ngày',
+    roleClue: 'Nuôi 180 dân · Cấp nguyên liệu Xưởng Thực Phẩm · 1 ngày',
     prerequisiteLabel: 'Đặt tự do trên đất trống / đất trũng',
     description:
-      'Vùng canh tác nông thủy sản chi phí thấp (650 Triệu VNĐ), hoàn thiện trong 1 ngày, cần 20 lao động phổ thông.',
+      'Mỗi vùng canh tác nông thủy sản hoạt động đảm bảo nguồn cung lương thực cho 180 người dân và cung cấp nguyên liệu cho Xưởng Chế biến Thực phẩm.',
+  },
+  {
+    id: 'ind_food',
+    name: 'Xưởng Chế Biến Thực Phẩm (4,5 Tỷ · 30 Nhân Sự · 2 Ngày)',
+    shortName: 'Xưởng Thực Phẩm',
+    category: 'zoning',
+    cost: BUILDING_SPECS.ind_food.costBillion,
+    constructionDays: BUILDING_SPECS.ind_food.constructionDays,
+    keyHint: 'L',
+    roleClue: 'Job Slots: 30 người · +Bonus sản lượng gần Nông Trại [9]',
+    prerequisiteLabel: 'Yêu cầu đặt sát cạnh Đường [1-3]',
+    description:
+      'Xưởng chế biến nông thủy sản sạch (không gây ô nhiễm nặng như Nhà máy SX), nhận thưởng sản lượng lớn khi đặt trong bán kính cung ứng của Nông Trại [9].',
   },
   {
     id: 'ind_factory',
@@ -454,10 +573,10 @@ export const TOOLS: ToolMetadata[] = [
     cost: BUILDING_SPECS.ind_factory.costBillion,
     constructionDays: BUILDING_SPECS.ind_factory.constructionDays,
     keyHint: '0',
-    roleClue: 'Job Slots: 40 người · Cần sát Đường [1-3]',
+    roleClue: 'Job Slots: 40 người · Ô nhiễm -4 Hạnh phúc bán kính 2 ô',
     prerequisiteLabel: 'Yêu cầu đặt sát cạnh Đường [1-3]',
     description:
-      'Nhà máy chế biến công nghiệp cần 40 công nhân & kỹ thuật viên. Bắt buộc phải đặt sát đường giao thông.',
+      'Nhà máy công nghiệp nặng cần 40 công nhân & kỹ thuật viên. Lưu ý: Khói bụi làm giảm -4 điểm Hạnh phúc đối với mỗi ô Khu Dân Cư nằm trong bán kính 2 ô.',
   },
   {
     id: 'ind_fdi',
@@ -468,9 +587,9 @@ export const TOOLS: ToolMetadata[] = [
     constructionDays: BUILDING_SPECS.ind_fdi.constructionDays,
     keyHint: 'F',
     roleClue: '50 Kỹ sư · Cần Đường Nhựa + Điện [I] + PCI ≥ 55',
-    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Cao Tốc + Điện [I] + PCI ≥ 55',
+    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Vành Đai/Cao Tốc + Điện [I] + PCI ≥ 55',
     description:
-      'Nhà máy bán dẫn FDI. Yêu cầu thành phố đã có Thủy Lợi & Điện [I], chỉ số PCI ≥ 55 và đặt sát Đường Nhựa/Cao Tốc.',
+      'Nhà máy bán dẫn FDI. Yêu cầu thành phố đã có Thủy Lợi & Điện [I], chỉ số PCI ≥ 55 và đặt sát Đường Nhựa/Vành Đai/Cao Tốc.',
   },
   {
     id: 'pub_admin',
@@ -480,10 +599,10 @@ export const TOOLS: ToolMetadata[] = [
     cost: BUILDING_SPECS.pub_admin.costBillion,
     constructionDays: BUILDING_SPECS.pub_admin.constructionDays,
     keyHint: 'U',
-    roleClue: '25 Nhân sự · +30% Hành chính PCI · Cần sát Đường',
+    roleClue: '25 Nhân sự · Xóa 12% thất thoát thuế · +30% Hành chính PCI',
     prerequisiteLabel: 'Yêu cầu đặt sát cạnh Đường [1-3]',
     description:
-      'Nâng cao hiệu quả giải quyết thủ tục đầu tư (+PCI), cần 25 cán bộ hành chính & chuyên viên. Bắt buộc đặt sát đường giao thông.',
+      'Nâng cao hiệu quả giải quyết thủ tục đầu tư (+PCI) và chống thất thoát 12% thu thuế CIT/PIT của thành phố. Cần 25 cán bộ hành chính & chuyên viên.',
   },
   {
     id: 'pub_hospital',
@@ -494,7 +613,7 @@ export const TOOLS: ToolMetadata[] = [
     constructionDays: BUILDING_SPECS.pub_hospital.constructionDays,
     keyHint: 'Y',
     roleClue: 'Khối Công · Bù lỗ -0.42 Tỷ/th · Tối đa An sinh & Hạnh phúc',
-    prerequisiteLabel: 'Yêu cầu đặt sát Đường Nhựa [2] hoặc Cao Tốc [3]',
+    prerequisiteLabel: 'Yêu cầu đặt sát Đường Nhựa [2], Vành Đai [K] hoặc Cao Tốc [3]',
     description:
       'Bệnh viện Công lập được ngân sách nhà nước bù lỗ (phí duy trì âm 420 Triệu/tháng), phục vụ mọi tầng lớp nhân dân giúp tối đa hóa chỉ số An sinh và Hạnh phúc.',
   },
@@ -507,7 +626,7 @@ export const TOOLS: ToolMetadata[] = [
     constructionDays: BUILDING_SPECS.priv_hospital.constructionDays,
     keyHint: 'O',
     roleClue: 'Khối Tư · Tự chủ tài chính · Đóng thuế CIT · Cần dân thu nhập khá',
-    prerequisiteLabel: 'Yêu cầu đặt sát Đường Nhựa [2] hoặc Cao Tốc [3]',
+    prerequisiteLabel: 'Yêu cầu đặt sát Đường Nhựa [2], Vành Đai [K] hoặc Cao Tốc [3]',
     description:
       'Bệnh viện Tư nhân hoạt động như doanh nghiệp thương mại: tự thu viện phí (không tốn phí duy trì ngân sách), đóng thuế CIT trực tiếp vào ngân sách nhưng đòi hỏi cư dân có thu nhập tương xứng.',
   },
@@ -533,7 +652,7 @@ export const TOOLS: ToolMetadata[] = [
     constructionDays: BUILDING_SPECS.priv_school.constructionDays,
     keyHint: 'Z',
     roleClue: 'Khối Tư · Học phí cao · Đóng thuế CIT · Cần dân trí thức/trung lưu',
-    prerequisiteLabel: 'Yêu cầu đặt sát Đường Nhựa [2] hoặc Cao Tốc [3]',
+    prerequisiteLabel: 'Yêu cầu đặt sát Đường Nhựa [2], Vành Đai [K] hoặc Cao Tốc [3]',
     description:
       'Trường Quốc tế / Tư thục thu học phí cao, tự chủ tài chính hoàn toàn và đóng thuế CIT trực tiếp vào ngân sách thành phố, đòi hỏi cư dân có thu nhập trung lưu & trí thức.',
   },
@@ -552,16 +671,16 @@ export const TOOLS: ToolMetadata[] = [
   },
   {
     id: 'util_power_water',
-    name: 'Thủy Lợi, Điện & Cấp Thoát Nước (2 Ngày)',
+    name: 'Thủy Lợi, Điện & Cấp Thoát Nước (250 Dân / 20 Công Trình · 2 Ngày)',
     shortName: 'Thủy Lợi & Điện',
     category: 'infra',
     cost: BUILDING_SPECS.util_power_water.costBillion,
     constructionDays: BUILDING_SPECS.util_power_water.constructionDays,
     keyHint: 'I',
-    roleClue: 'Job Slots: 25 người · Mở khóa công trình lớn · 2 ngày',
+    roleClue: 'Cấp điện/nước 250 dân & 20 công trình · Mở khóa công trình lớn',
     prerequisiteLabel: 'Đặt tự do trên đất quy hoạch',
     description:
-      'Công trình thủy lợi, điện sạch và cấp thoát nước hoàn thiện trong 2 ngày. Là điều kiện tiên quyết để xây TT Thương Mại, FDI và Showbiz.',
+      'Mỗi trạm hoàn thiện và có nhân sự cấp công suất cho tối đa 250 dân và 20 công trình. Nếu quá tải (>100%), sản lượng kinh tế giảm 35% và -8 Hạnh phúc.',
   },
   {
     id: 'showbiz_stadium',
@@ -572,7 +691,7 @@ export const TOOLS: ToolMetadata[] = [
     constructionDays: BUILDING_SPECS.showbiz_stadium.constructionDays,
     keyHint: 'J',
     roleClue: 'Phím [J] · Cần Đường Nhựa + Điện [I] + Dân ≥ 80',
-    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Cao Tốc + Điện [I] + Dân ≥ 80',
+    prerequisiteLabel: 'Yêu cầu sát Đường Nhựa/Vành Đai/Cao Tốc + Điện [I] + Dân ≥ 80',
     description:
       'Tổ hợp sự kiện văn hóa giải trí (Phím tắt [J], không trùng WASD). Khi xây xong và có tối thiểu 20/40 nhân sự làm việc mới mở khóa chức năng Tổ chức Đại Nhạc Hội!',
   },
@@ -614,8 +733,10 @@ export const TILE_LABELS: Record<TileType, string> = {
   com_street: 'Dãy Shophouse & Hàng Quán',
   com_market: 'Chợ Truyền Thống',
   com_mall: 'Trung Tâm Thương Mại',
+  com_office: 'Cao Ốc Văn Phòng Tài Chính',
   agr_farm: 'Vùng Nông Thủy Hải Sản',
-  ind_factory: 'Nhà Máy Sản Xuất',
+  ind_food: 'Xưởng Chế Biến Thực Phẩm',
+  ind_factory: 'Nhà Máy Sản Xuất Công Nghiệp',
   ind_fdi: 'Tổ Hợp Công Nghệ Cao FDI',
   pub_admin: 'UBND & Trung Tâm Hành Chính Công',
   pub_edu_med: 'Bệnh Viện & Trường Đại Học',
@@ -628,6 +749,7 @@ export const TILE_LABELS: Record<TileType, string> = {
   showbiz_stadium: 'Sân Vận Động & Nhà Hát Showbiz',
   road_alley: 'Đường Đất / Hẻm Nhỏ',
   road_urban: 'Đường Nhựa Đô Thị',
+  road_ring: 'Đường Vành Đai Đô Thị',
   road_highway: 'Quốc Lộ / Cao Tốc Trên Cao',
   gateway_port: 'Cảng Biển Quốc Tế & Logistics',
   gateway_station: 'Ga Tàu Hỏa & Cửa Ngõ Liên Vùng',
@@ -639,6 +761,7 @@ export const DEFAULT_CUSTOM_NAME_PREFIX: Record<TileType, string> = {
   river_water: 'Sông Thịnh Vượng',
   road_alley: 'Hẻm Dân Sinh',
   road_urban: 'Đường Nhựa Đô Thị',
+  road_ring: 'Đại Lộ Vành Đai',
   road_highway: 'Cao Tốc Liên Vùng',
   res_low: 'Nhà Ống Phố Cổ',
   res_mid: 'Chung Cư Mini An Cư',
@@ -646,7 +769,9 @@ export const DEFAULT_CUSTOM_NAME_PREFIX: Record<TileType, string> = {
   com_street: 'Dãy Shophouse Mặt Tiền',
   com_market: 'Chợ Truyền Thống',
   com_mall: 'Trung Tâm Thương Mại',
+  com_office: 'Tháp Tài Chính Thịnh Vượng',
   agr_farm: 'Nông Trại Thủy Sản',
+  ind_food: 'Xưởng Chế Biến Thực Phẩm',
   ind_factory: 'Nhà Máy Chế Biến',
   ind_fdi: 'Tổ Hợp Bán Dẫn FDI',
   pub_admin: 'Trung Tâm Hành Chính UBND',
@@ -674,10 +799,14 @@ export function createDefaultPolicies(): MacroPolicies {
     citShowbiz: 20,
     compensationLevel: 'fair',
     welfareLevel: 45,
-    greenLightMainRatio: 55,
+    greenLightMainRatio: 58,
     allowSidewalkEconomy: true,
     banPeakHeavyTrucks: false,
     subsidizeBusTransit: true,
+    transitLevel: 1,
+    enableTollbooth: false,
+    sidewalkPolicy: 'informal',
+    banTrucksInResidential: false,
   };
 }
 
@@ -705,6 +834,15 @@ export function isRoadTile(type: TileType): boolean {
   return (
     type === 'road_alley' ||
     type === 'road_urban' ||
+    type === 'road_ring' ||
+    type === 'road_highway'
+  );
+}
+
+export function isMainArterialRoad(type: TileType): boolean {
+  return (
+    type === 'road_urban' ||
+    type === 'road_ring' ||
     type === 'road_highway'
   );
 }
@@ -715,6 +853,24 @@ export function isConnectableRoadOrGateway(type: TileType): boolean {
     type === 'gateway_port' ||
     type === 'gateway_station'
   );
+}
+
+/**
+ * Quy tắc kết nối đường bộ:
+ * `road_ring` (Đường Vành Đai) chỉ snap/kết nối với `road_ring`, `road_urban`, `road_highway` (và cửa ngõ gateway),
+ * TUYỆT ĐỐI KHÔNG kết nối với `road_alley` (Đường Hẻm).
+ */
+export function canRoadsConnect(typeA: TileType, typeB: TileType): boolean {
+  if (!isConnectableRoadOrGateway(typeA) || !isConnectableRoadOrGateway(typeB)) {
+    return false;
+  }
+  if (
+    (typeA === 'road_ring' && typeB === 'road_alley') ||
+    (typeA === 'road_alley' && typeB === 'road_ring')
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function isPublicServiceModule(type: TileType): boolean {
@@ -729,6 +885,198 @@ export function isPublicServiceModule(type: TileType): boolean {
 
 export function isPrivateServiceModule(type: TileType): boolean {
   return type === 'priv_hospital' || type === 'priv_school';
+}
+
+export function isEconomicCitModule(type: TileType): boolean {
+  return (
+    type === 'agr_farm' ||
+    type === 'ind_food' ||
+    type === 'ind_factory' ||
+    type === 'ind_fdi' ||
+    type === 'com_street' ||
+    type === 'com_market' ||
+    type === 'com_mall' ||
+    type === 'com_office' ||
+    type === 'priv_hospital' ||
+    type === 'priv_school' ||
+    type === 'showbiz_stadium'
+  );
+}
+
+/**
+ * Minh bạch 5 chỉ số tài chính cho Build Menu & Tooltip (`getBuildingFinancialPreview`):
+ * 1. Vốn đầu tư (costLabel)
+ * 2. Upkeep/tháng (upkeepLabel)
+ * 3. Yêu cầu nhân sự (workersLabel)
+ * 4. Thuế/Sản lượng kỳ vọng (expectedTaxOrOutputLabel)
+ * 5. Thời gian hoàn vốn (paybackLabel — hoặc "Chi đầu tư công")
+ */
+export function getBuildingFinancialPreview(
+  specOrTool: BuildingSpecification | TileType | ToolId,
+  policies: MacroPolicies,
+  difficulty: DifficultyLevel = 'hard'
+): BuildingFinancialPreview {
+  const diffMult = getDifficultySpec(difficulty).upkeepMultiplier;
+
+  if (specOrTool === 'sub_drainage') {
+    const cost = 0.015;
+    const upkeep = Number((0.002 * diffMult).toFixed(4));
+    return {
+      costBillion: cost,
+      costLabel: formatVnd(cost),
+      upkeepBillion: upkeep,
+      upkeepLabel: `${formatVnd(upkeep)}/th`,
+      requiredWorkersTotal: 0,
+      workersLabel: '0 người (Tự động)',
+      expectedMonthlyTaxOrOutputBillion: 0,
+      expectedTaxOrOutputLabel: 'Chống ngập (-100% ngập ô)',
+      paybackMonths: null,
+      paybackLabel: 'Chi đầu tư công',
+      isPublicInvestment: true,
+    };
+  }
+
+  if (specOrTool === 'act_clearance' || specOrTool === 'inspect') {
+    return {
+      costBillion: 0,
+      costLabel: 'Theo giá đất',
+      upkeepBillion: 0,
+      upkeepLabel: '0 Tỷ/th',
+      requiredWorkersTotal: 0,
+      workersLabel: '0 người',
+      expectedMonthlyTaxOrOutputBillion: 0,
+      expectedTaxOrOutputLabel: 'Giải phóng mặt bằng',
+      paybackMonths: null,
+      paybackLabel: 'Chi đầu tư công',
+      isPublicInvestment: true,
+    };
+  }
+
+  let tileType: TileType | null = null;
+  let spec: BuildingSpecification;
+  if (typeof specOrTool === 'string') {
+    tileType = specOrTool as TileType;
+    spec = BUILDING_SPECS[tileType] ?? BUILDING_SPECS.empty_land;
+  } else {
+    spec = specOrTool;
+  }
+
+  const costBillion = spec.costBillion;
+  const upkeepBillion = Number((spec.maintenanceBillion * diffMult).toFixed(4));
+  const req = spec.requiredWorkers;
+  const requiredWorkersTotal = req.unskilled + req.skilled + req.educated;
+
+  let workersLabel = '0 người';
+  if (spec.maxCapacity > 0) {
+    workersLabel = `Cư trú tối đa ${spec.maxCapacity} dân`;
+  } else if (requiredWorkersTotal > 0) {
+    const parts: string[] = [];
+    if (req.unskilled > 0) parts.push(`${req.unskilled} PT`);
+    if (req.skilled > 0) parts.push(`${req.skilled} TC`);
+    if (req.educated > 0) parts.push(`${req.educated} ĐH`);
+    workersLabel = `${requiredWorkersTotal} người (${parts.join(' · ')})`;
+  }
+
+  // Xác định thuế suất CIT tương ứng
+  let citRate = 0;
+  if (tileType === 'agr_farm') citRate = policies.citAgri;
+  else if (tileType === 'ind_factory' || tileType === 'ind_food') citRate = policies.citIndustry;
+  else if (
+    tileType === 'com_street' ||
+    tileType === 'com_market' ||
+    tileType === 'com_mall' ||
+    tileType === 'com_office' ||
+    tileType === 'priv_hospital' ||
+    tileType === 'priv_school'
+  ) {
+    citRate = policies.citMarket;
+  } else if (tileType === 'ind_fdi') citRate = policies.citFdi;
+  else if (tileType === 'showbiz_stadium') citRate = policies.citShowbiz;
+  else if (!tileType && spec.baseGrossOutputBillion > 0) {
+    citRate = policies.citMarket;
+  }
+
+  // Tính PIT kỳ vọng từ nhân sự hoặc cư dân
+  const pitFromStaff =
+    req.unskilled * 0.015 * (policies.pitLow / 100) +
+    req.skilled * 0.032 * (policies.pitMid / 100) +
+    req.educated * 0.068 * (policies.pitEducated / 100);
+
+  if (spec.maxCapacity > 0) {
+    // Khu dân cư: đóng góp PIT khi lấp đầy
+    let estPit = 0;
+    if (spec.minimumWealthLevel === 'high') {
+      estPit =
+        spec.maxCapacity * 0.55 * 0.032 * (policies.pitMid / 100) +
+        spec.maxCapacity * 0.45 * 0.068 * (policies.pitEducated / 100);
+    } else if (spec.minimumWealthLevel === 'mid') {
+      estPit =
+        spec.maxCapacity * 0.45 * 0.015 * (policies.pitLow / 100) +
+        spec.maxCapacity * 0.4 * 0.032 * (policies.pitMid / 100) +
+        spec.maxCapacity * 0.15 * 0.068 * (policies.pitEducated / 100);
+    } else {
+      estPit = spec.maxCapacity * 0.8 * 0.015 * (policies.pitLow / 100);
+    }
+    const netMonthly = Math.max(0.01, estPit - upkeepBillion);
+    const paybackMonths = Math.max(1, Math.ceil(costBillion / netMonthly));
+    return {
+      costBillion,
+      costLabel: formatVnd(costBillion),
+      upkeepBillion,
+      upkeepLabel: upkeepBillion > 0 ? `${formatVnd(upkeepBillion)}/th` : '0 Tỷ/th',
+      requiredWorkersTotal: 0,
+      workersLabel,
+      expectedMonthlyTaxOrOutputBillion: Number(estPit.toFixed(2)),
+      expectedTaxOrOutputLabel: `+${formatVnd(estPit)} PIT/th`,
+      paybackMonths,
+      paybackLabel: `~${paybackMonths} tháng`,
+      isPublicInvestment: false,
+    };
+  }
+
+  if (spec.baseGrossOutputBillion > 0) {
+    const expectedCit = spec.baseGrossOutputBillion * (citRate / 100);
+    const totalTaxContribution = expectedCit + pitFromStaff;
+    const netMonthly = totalTaxContribution - upkeepBillion;
+    const paybackMonths =
+      netMonthly > 0.01 ? Math.max(1, Math.ceil(costBillion / netMonthly)) : null;
+
+    return {
+      costBillion,
+      costLabel: formatVnd(costBillion),
+      upkeepBillion,
+      upkeepLabel: upkeepBillion > 0 ? `${formatVnd(upkeepBillion)}/th` : '0 Tỷ/th (Tự chủ)',
+      requiredWorkersTotal,
+      workersLabel,
+      expectedMonthlyTaxOrOutputBillion: Number(totalTaxContribution.toFixed(2)),
+      expectedTaxOrOutputLabel: `+${formatVnd(totalTaxContribution)}/th (SL ${formatVnd(spec.baseGrossOutputBillion)})`,
+      paybackMonths,
+      paybackLabel: paybackMonths !== null ? `~${paybackMonths} tháng` : 'Chưa hoàn vốn',
+      isPublicInvestment: false,
+    };
+  }
+
+  // Công trình công ích / Đường bộ
+  let serviceLabel = 'Hạ tầng giao thông';
+  if (tileType === 'util_power_water') serviceLabel = 'Cấp 250 dân & 20 công trình';
+  else if (tileType === 'pub_admin') serviceLabel = 'Chống thất thoát 12% thuế · +PCI';
+  else if (tileType === 'pub_hospital') serviceLabel = '+An sinh & Y tế công lập';
+  else if (tileType === 'pub_school') serviceLabel = '+Hạnh phúc & Giáo dục công';
+  else if (tileType === 'pub_security') serviceLabel = '+An ninh & PCCC bán kính 5 ô';
+
+  return {
+    costBillion,
+    costLabel: formatVnd(costBillion),
+    upkeepBillion,
+    upkeepLabel: `${formatVnd(upkeepBillion)}/th`,
+    requiredWorkersTotal,
+    workersLabel,
+    expectedMonthlyTaxOrOutputBillion: Number(pitFromStaff.toFixed(2)),
+    expectedTaxOrOutputLabel: serviceLabel,
+    paybackMonths: null,
+    paybackLabel: 'Chi đầu tư công',
+    isPublicInvestment: true,
+  };
 }
 
 /**
@@ -856,7 +1204,7 @@ export const CITY_LEVEL_SPECS: Record<CityLevel, CityLevelSpec> = {
     title: 'Đô Thị Loại IV',
     minPopulation: 150,
     unlockSummary:
-      'Mở khóa Chung Cư Mini, Trường Công, Bệnh Viện Công, Công An PCCC & Thanh trượt Thuế TNCN (PIT).',
+      'Mở khóa Đường Vành Đai, Xưởng Thực Phẩm, Chung Cư Mini, Trường Công, Bệnh Viện Công, Công An PCCC & Thanh trượt Thuế TNCN (PIT).',
   },
   3: {
     level: 3,
@@ -870,7 +1218,7 @@ export const CITY_LEVEL_SPECS: Record<CityLevel, CityLevelSpec> = {
     title: 'Đô Thị Loại II',
     minPopulation: 900,
     unlockSummary:
-      'Mở khóa Chung Cư Cao Cấp, Siêu Thị Mall, Cao Tốc, Khu Công Nghệ Cao FDI & Thanh trượt Thuế CIT/FDI.',
+      'Mở khóa Chung Cư Cao Cấp, Văn Phòng Tài Chính, Siêu Thị Mall, Cao Tốc, Khu Công Nghệ Cao FDI & 5 Thanh trượt Thuế CIT.',
   },
   5: {
     level: 5,
@@ -893,6 +1241,8 @@ export const TOOL_UNLOCK_LEVEL: Record<ToolId, CityLevel> = {
   sub_drainage: 1,
   act_clearance: 1,
 
+  road_ring: 2,
+  ind_food: 2,
   res_mid: 2,
   pub_school: 2,
   pub_hospital: 2,
@@ -907,6 +1257,7 @@ export const TOOL_UNLOCK_LEVEL: Record<ToolId, CityLevel> = {
 
   res_high: 4,
   com_mall: 4,
+  com_office: 4,
   road_highway: 4,
   ind_fdi: 4,
 
@@ -947,6 +1298,10 @@ export const POLICY_UNLOCK_LEVEL: Record<PolicyLockKey, CityLevel> = {
   allowSidewalkEconomy: 1,
   banPeakHeavyTrucks: 1,
   subsidizeBusTransit: 1,
+  transitLevel: 1,
+  enableTollbooth: 1,
+  sidewalkPolicy: 1,
+  banTrucksInResidential: 1,
 };
 
 export function isToolUnlockedAtLevel(
@@ -1073,11 +1428,7 @@ export function countOnboardingGridStats(grid: TileData[][]): {
 
   for (const row of grid) {
     for (const cell of row) {
-      if (
-        cell.type === 'road_alley' ||
-        cell.type === 'road_urban' ||
-        cell.type === 'road_highway'
-      ) {
+      if (isRoadTile(cell.type)) {
         totalRoadCount += 1;
       }
       if (cell.type === 'res_low') {

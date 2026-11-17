@@ -345,6 +345,8 @@ export function disposeGroupGeometries(
   });
 }
 
+export const disposeGroupResources = disposeGroupGeometries;
+
 export function buildTileStructureGroup(
   tile: TileData,
   roadConn: RoadConnections,
@@ -536,6 +538,46 @@ export function buildTileStructureGroup(
     );
     neonSign.position.set(0, 1.75 * s, 1.54 * s);
     group.add(neonSign);
+  } else if (type === 'com_office') {
+    group.add(getContactShadowMesh(2.1 * s));
+    const podium = new THREE.Mesh(
+      new THREE.BoxGeometry(3.3 * s, 1.1 * s, 3.1 * s),
+      getMat(0x1e293b, 0.3, 0.65)
+    );
+    podium.position.set(0, 0.55 * s, 0);
+    podium.castShadow = true;
+    podium.receiveShadow = true;
+    group.add(podium);
+
+    const mainTower = new THREE.Mesh(
+      new THREE.BoxGeometry(1.95 * s, 5.2 * s, 1.95 * s),
+      getMat(0x0284c7, 0.12, 0.9, 0x0ea5e9, 0.22)
+    );
+    mainTower.position.set(0, 1.1 * s + 2.6 * s, 0);
+    mainTower.castShadow = true;
+    mainTower.receiveShadow = true;
+    group.add(mainTower);
+
+    const goldFins = new THREE.Mesh(
+      new THREE.BoxGeometry(2.06 * s, 5.0 * s, 0.35 * s),
+      getMat(0xf59e0b, 0.25, 0.78)
+    );
+    goldFins.position.set(0, 1.1 * s + 2.5 * s, 0);
+    group.add(goldFins);
+
+    const spireBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55 * s, 0.85 * s, 0.65 * s, 8),
+      getMat(0xf8fafc, 0.2, 0.8)
+    );
+    spireBase.position.set(0, 6.62 * s, 0);
+    group.add(spireBase);
+
+    const spire = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03 * s, 0.09 * s, 1.35 * s, 8),
+      getMat(0xfacc15, 0.15, 0.9, 0xf59e0b, 0.5)
+    );
+    spire.position.set(0, 7.55 * s, 0);
+    group.add(spire);
   } else if (type === 'agr_farm') {
     const paddy = new THREE.Mesh(
       new THREE.BoxGeometry(3.6 * s, 0.14 * s, 1.65 * s),
@@ -593,6 +635,40 @@ export function buildTileStructureGroup(
       );
       band.position.set((-0.9 + i * 0.75) * s, 2.4 * s, -0.8 * s);
       group.add(band);
+    }
+  } else if (type === 'ind_food') {
+    group.add(getContactShadowMesh(2.0 * s));
+    const foodHall = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6 * s, 1.45 * s, 2.5 * s),
+      getMat(0xf8fafc, 0.45, 0.25)
+    );
+    foodHall.position.set(-0.35 * s, 0.725 * s, 0);
+    foodHall.castShadow = true;
+    foodHall.receiveShadow = true;
+    group.add(foodHall);
+
+    const greenRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(2.68 * s, 0.16 * s, 2.58 * s),
+      getMat(0x16a34a, 0.4, 0.3)
+    );
+    greenRoof.position.set(-0.35 * s, 1.52 * s, 0);
+    group.add(greenRoof);
+
+    for (let i = 0; i < 2; i++) {
+      const silo = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.42 * s, 0.42 * s, 2.1 * s, 14),
+        getMat(0xe2e8f0, 0.22, 0.85)
+      );
+      silo.position.set(1.25 * s, 1.05 * s, (-0.55 + i * 1.1) * s);
+      silo.castShadow = true;
+      group.add(silo);
+
+      const siloDome = new THREE.Mesh(
+        new THREE.SphereGeometry(0.42 * s, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+        getMat(0x22c55e, 0.3, 0.5)
+      );
+      siloDome.position.set(1.25 * s, 2.1 * s, (-0.55 + i * 1.1) * s);
+      group.add(siloDome);
     }
   } else if (type === 'ind_fdi') {
     group.add(getContactShadowMesh(2.1 * s));
@@ -847,6 +923,7 @@ export function buildTileStructureGroup(
   } else if (
     type === 'road_alley' ||
     type === 'road_urban' ||
+    type === 'road_ring' ||
     type === 'road_highway'
   ) {
     if (type === 'road_alley') {
@@ -896,15 +973,44 @@ export function buildTileStructureGroup(
         armE.position.set(1.3 * s, 0.04 * s, 0);
         group.add(armE);
       }
-    } else if (type === 'road_urban') {
-      const roadMat = getRoadSurfaceMat(roadConn, false, maxAnisotropy);
+    } else if (type === 'road_urban' || type === 'road_ring') {
+      const isRing = type === 'road_ring';
+      const roadMat = getRoadSurfaceMat(roadConn, isRing, maxAnisotropy);
       const road = new THREE.Mesh(
-        new THREE.BoxGeometry(TILE_WORLD_SIZE, 0.1 * s, TILE_WORLD_SIZE),
+        new THREE.BoxGeometry(
+          TILE_WORLD_SIZE,
+          isRing ? 0.14 * s : 0.1 * s,
+          TILE_WORLD_SIZE
+        ),
         roadMat
       );
-      road.position.y = 0.05 * s;
+      road.position.y = isRing ? 0.07 * s : 0.05 * s;
       road.receiveShadow = true;
       group.add(road);
+
+      if (isRing) {
+        // Dải phân cách cây xanh và trụ đèn cao áp của Đường Vành Đai 4 làn
+        const median = new THREE.Mesh(
+          new THREE.BoxGeometry(0.28 * s, 0.18 * s, 0.28 * s),
+          getMat(0x16a34a, 0.7, 0.1)
+        );
+        median.position.set(0, 0.16 * s, 0);
+        group.add(median);
+
+        const lampPost = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.04 * s, 0.05 * s, 1.65 * s, 8),
+          getMat(0x94a3b8, 0.3, 0.8)
+        );
+        lampPost.position.set(0, 0.85 * s, 0);
+        group.add(lampPost);
+
+        const lampHead = new THREE.Mesh(
+          new THREE.BoxGeometry(0.45 * s, 0.08 * s, 0.16 * s),
+          getMat(0xfef08a, 0.2, 0.5, 0xfacc15, 0.85)
+        );
+        lampHead.position.set(0, 1.68 * s, 0);
+        group.add(lampHead);
+      }
 
       // Đèn giao thông tự động xuất hiện tại Ngã Ba Chữ T (T-Junction) và Ngã Tư (Cross-Intersection)
       const connCount =

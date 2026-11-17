@@ -46,6 +46,7 @@ const TILE_COLORS: Record<TileType, { base: string; roof: string; height: number
   river_water: { base: '#1e5b88', roof: '#2770a6', height: 0 },
   road_alley: { base: '#6b655c', roof: '#7c756b', height: 2 },
   road_urban: { base: '#333b44', roof: '#424c58', height: 2 },
+  road_ring: { base: '#1e293b', roof: '#16a34a', height: 3 },
   road_highway: { base: '#283038', roof: '#37424d', height: 5 },
   res_low: { base: '#d9c39e', roof: '#c85a32', height: 18 },
   res_mid: { base: '#cbd5e1', roof: '#3b82f6', height: 32 },
@@ -53,8 +54,10 @@ const TILE_COLORS: Record<TileType, { base: string; roof: string; height: number
   com_street: { base: '#fde68a', roof: '#d97706', height: 22 },
   com_market: { base: '#fca5a5', roof: '#dc2626', height: 20 },
   com_mall: { base: '#7dd3fc', roof: '#0284c7', height: 42 },
+  com_office: { base: '#38bdf8', roof: '#0284c7', height: 64 },
   agr_farm: { base: '#65a30d', roof: '#84cc16', height: 6 },
   ind_factory: { base: '#9ca3af', roof: '#4b5563', height: 26 },
+  ind_food: { base: '#bbf7d0', roof: '#16a34a', height: 28 },
   ind_fdi: { base: '#a5f3fc', roof: '#0891b2', height: 38 },
   pub_admin: { base: '#fde047', roof: '#b91c1c', height: 28 },
   pub_edu_med: { base: '#f8fafc', roof: '#ef4444', height: 34 },
@@ -104,11 +107,42 @@ export function mountIsometricCanvasFallback({
   const halfBoard = (GRID_SIZE * TILE_WORLD_SIZE) / 2;
   const nodeOccupancyMap: NodeOccupancyMap = new Map();
   let navAgents: VehicleNavAgentState[] = [];
+  let lastRoadSig = '';
+
+  const computeRoadSig = (grid: TileData[][]) => {
+    const st = getState();
+    const parts: string[] = [
+      `tr:${st.policies.transitLevel ?? 0}|bt:${
+        st.policies.banTrucksInResidential ? 1 : 0
+      }`,
+    ];
+    for (let z = 0; z < GRID_SIZE; z++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const t = grid[z]?.[x];
+        if (
+          t &&
+          (isRoadTile(t.type) ||
+            t.type === 'gateway_port' ||
+            t.type === 'gateway_station')
+        ) {
+          parts.push(`${x},${z}:${t.type}`);
+        }
+      }
+    }
+    return parts.join(';');
+  };
 
   const rebuildNavAgents = (grid: TileData[][]) => {
+    const sig = computeRoadSig(grid);
+    if (sig === lastRoadSig) return;
+    lastRoadSig = sig;
     nodeOccupancyMap.clear();
     navAgents = [];
-    const generatedRoutes = generateVehicleRoutesFromGrid(grid);
+    const st = getState();
+    const generatedRoutes = generateVehicleRoutesFromGrid(grid, {
+      banTrucksInResidential: st.policies.banTrucksInResidential,
+      transitLevel: st.policies.transitLevel,
+    });
     for (const route of generatedRoutes) {
       const count = route.totalLength >= 28 ? 2 : 1;
       for (let vIdx = 0; vIdx < count; vIdx++) {
