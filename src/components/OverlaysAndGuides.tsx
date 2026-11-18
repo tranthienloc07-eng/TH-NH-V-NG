@@ -254,7 +254,7 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
               </button>
             </form>
           ) : (
-            <div className="flex items-center gap-1 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
               <h3
                 data-testid="context-custom-name"
                 className="text-xs sm:text-sm font-extrabold text-amber-300 truncate max-w-[180px] sm:max-w-[240px]"
@@ -269,9 +269,9 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
                     setNameDraft(report.customName);
                     setEditingName(true);
                   }}
-                  className="text-[10px] text-slate-400 hover:text-amber-300 cursor-pointer shrink-0"
+                  className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[9px] font-semibold text-slate-300 hover:text-amber-300 cursor-pointer shrink-0"
                 >
-                  ✎
+                  Đổi tên
                 </button>
               )}
             </div>
@@ -365,7 +365,7 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
           </div>
         )}
 
-        {/* Cụm nút bên phải: Thả Chuột / Lia (không bị cắt chữ) + Đóng */}
+        {/* Nút bên phải: Thả Chuột / Lia [ESC] (đóng bảng và trả về chế độ lia bản đồ) */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
@@ -377,14 +377,6 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
             className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-amber-400/50 text-[11px] font-bold text-amber-200 cursor-pointer whitespace-nowrap shrink-0"
           >
             Thả Chuột / Lia [ESC]
-          </button>
-          <button
-            type="button"
-            data-testid="context-close-btn"
-            onClick={onClose}
-            className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-slate-300 cursor-pointer whitespace-nowrap shrink-0"
-          >
-            ✕
           </button>
         </div>
       </div>
@@ -458,8 +450,8 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
             )}
           </div>
 
-          <div className="rounded bg-[#0d1824] px-2 py-1 text-[10px] text-slate-300 border border-slate-800 flex items-center justify-between gap-1">
-            <span className="truncate">
+          <div className="rounded bg-[#0d1824] px-2 py-1.5 text-[10px] text-slate-300 border border-slate-800 flex flex-wrap items-center justify-between gap-1.5">
+            <span className="leading-snug break-words flex-1 min-w-0">
               <strong className="text-cyan-300">Phân tầng:</strong>{' '}
               {report.dominantLaborLabel}
             </span>
@@ -799,6 +791,36 @@ export const HowToPlayModal: React.FC<{
             <p className="text-slate-300">
               • <strong>Hậu quả &amp; Cứu vãn:</strong> Mỗi tháng khủng hoảng làm <strong>PCI -5 điểm</strong> và <strong>Di cư +10%</strong>. Hãy tăng <strong>Trợ cấp An sinh</strong>, giảm <strong>Thuế TNCN (PIT)</strong> hoặc chọn đền bù <strong>Cao 135%</strong> để đưa Hạnh phúc &gt; 40% và xóa bỏ khủng hoảng!
             </p>
+          </div>
+        </div>
+
+        {/* Bảng Hệ thống Phím Tắt Chuẩn Hóa (Zero-Collision Hotkeys) */}
+        <div
+          data-testid="howtoplay-hotkeys-card"
+          className="mt-4 rounded-xl bg-[#111f2e] border border-cyan-500/40 p-4 text-xs space-y-2"
+        >
+          <div className="font-extrabold text-cyan-300 uppercase tracking-wider text-[11px]">
+            5. Hệ Thống Phím Tắt Chuẩn Hóa (Zero-Collision · Không Trùng W/A/S/D)
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-200 font-mono">
+            <div>
+              • <strong className="text-amber-300">F1–F4:</strong> Chuyển 4 Tab công trình (Đường · Phân lô · Hạ tầng · Đặc biệt)
+            </div>
+            <div>
+              • <strong className="text-amber-300">Phím số 1–9, 0:</strong> Chọn nhanh công trình theo thứ tự trong Tab đang mở
+            </div>
+            <div>
+              • <strong className="text-emerald-300">W/A/S/D · ↑↓←→:</strong> Di chuyển Camera
+            </div>
+            <div>
+              • <strong className="text-emerald-300">T / G / C / B:</strong> Thuế [T] · Giao thông [G] · Cố vấn [C] · Báo cáo [B]
+            </div>
+            <div>
+              • <strong className="text-sky-300">E / Q / V / J:</strong> Vùng 9×9 [E] · Nhiệm vụ [Q] · Cống ngầm [V] · Concert [J]
+            </div>
+            <div>
+              • <strong className="text-sky-300">H / Space·P / R / Esc:</strong> Ẩn HUD [H] · Pause [Space/P] · Reset [R] · Đóng/Thả [Esc]
+            </div>
           </div>
         </div>
       </div>

@@ -547,12 +547,42 @@ export function formatAutoSaveTimestamp(date = new Date()): string {
   )} · ${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
 }
 
+export function hasPlayerActuallyPlayed(
+  state: Partial<CityGameState> | null | undefined
+): boolean {
+  if (!state || !Array.isArray(state.grid)) return false;
+  if (state.mode !== 'playing' && state.mode !== 'paused') return false;
+
+  const hasBuiltOrDrainedTile = state.grid.some(
+    (row) =>
+      Array.isArray(row) &&
+      row.some(
+        (cell) =>
+          cell && (Boolean(cell.hasDrainage) || isBuiltStructure(cell.type))
+      )
+  );
+  const hasTimeProgressed =
+    (typeof state.year === 'number' && state.year > 2026) ||
+    (typeof state.month === 'number' && state.month > 1) ||
+    (typeof state.day === 'number' && state.day > 1);
+  const hasProgressRecords =
+    (typeof state.nextInstanceSeq === 'number' && state.nextInstanceSeq > 1) ||
+    (Array.isArray(state.globalLedger) && state.globalLedger.length > 0) ||
+    (Array.isArray(state.completedQuests) && state.completedQuests.length > 0);
+
+  return hasBuiltOrDrainedTile || hasTimeProgressed || hasProgressRecords;
+}
+
 export function saveGameStateToLocalStorage(
   state: CityGameState
 ): string | null {
   const savedAt = formatAutoSaveTimestamp();
   try {
-    if (typeof window !== 'undefined' && window.localStorage) {
+    if (
+      typeof window !== 'undefined' &&
+      window.localStorage &&
+      hasPlayerActuallyPlayed(state)
+    ) {
       const payload: CityGameState = {
         ...state,
         lastSavedAt: savedAt,
@@ -579,7 +609,8 @@ export function loadGameStateFromLocalStorage(): CityGameState | null {
       !Array.isArray(parsed.grid) ||
       typeof parsed.treasury !== 'number' ||
       !parsed.policies ||
-      !parsed.metrics
+      !parsed.metrics ||
+      !hasPlayerActuallyPlayed(parsed)
     ) {
       return null;
     }
@@ -1464,7 +1495,7 @@ export function generateCityAdvisorBriefing(
     });
   }
 
-  if (metrics.floodedTileCount > 0 || metrics.drainageCoverage < 60) {
+  if (metrics.floodedTileCount > 0) {
     diagnostics.push(
       `Có ${metrics.floodedTileCount} phân khu đang bị ngập nước (Độ phủ cống ngầm: ${metrics.drainageCoverage}%), làm giảm hiệu suất kinh tế.`
     );

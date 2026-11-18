@@ -8,8 +8,10 @@ interface GameModalsProps {
   snapshot: RunSnapshot | null;
   bestPci: number;
   lastSavedAt?: string | null;
+  hasSavedSession?: boolean;
   onSelectDifficulty?: (difficulty: DifficultyLevel) => void;
   onStartGame: () => void;
+  onContinueSavedSession?: () => void;
   onOpenHowToPlay: () => void;
   onResumeGame: () => void;
   onRestartGame: () => void;
@@ -23,8 +25,10 @@ export const GameModals: React.FC<GameModalsProps> = ({
   snapshot,
   bestPci,
   lastSavedAt,
+  hasSavedSession = false,
   onSelectDifficulty,
   onStartGame,
+  onContinueSavedSession,
   onOpenHowToPlay,
   onResumeGame,
   onRestartGame,
@@ -34,6 +38,11 @@ export const GameModals: React.FC<GameModalsProps> = ({
   if (mode === 'playing') return null;
 
   if (mode === 'title') {
+    const difficultyEnBadge: Record<DifficultyLevel, string> = {
+      easy: 'Easy',
+      hard: 'Hard',
+      expert: 'Expert',
+    };
     return (
       <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-8 md:p-14 bg-gradient-to-r from-[#070e17]/95 via-[#070e17]/65 to-transparent">
         <div className="pointer-events-auto max-w-xl mt-4 md:mt-8">
@@ -115,7 +124,7 @@ export const GameModals: React.FC<GameModalsProps> = ({
             className="mb-4 rounded-xl bg-[#0e1a27]/90 border border-slate-700/80 p-3 shadow-lg"
           >
             <div className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-2">
-              Chọn Cấp Độ Thử Thách Điều Hành:
+              Chọn Cấp Độ Thử Thách Điều Hành (Easy · Hard · Expert):
             </div>
             <div className="grid grid-cols-3 gap-2">
               {(['easy', 'hard', 'expert'] as DifficultyLevel[]).map((lvl) => {
@@ -133,11 +142,11 @@ export const GameModals: React.FC<GameModalsProps> = ({
                         : 'bg-[#142334]/80 border-slate-700 text-slate-300 hover:bg-[#192c40]'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-1">
                       <span className="text-xs font-extrabold">
-                        {spec.label}
+                        {spec.label} ({difficultyEnBadge[lvl]})
                       </span>
-                      <span className="font-mono text-[11px] font-bold text-emerald-300">
+                      <span className="font-mono text-[11px] font-bold text-emerald-300 shrink-0">
                         {spec.startingTreasury} Tỷ
                       </span>
                     </div>
@@ -151,16 +160,31 @@ export const GameModals: React.FC<GameModalsProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 mt-3">
+            {hasSavedSession && onContinueSavedSession && (
+              <button
+                type="button"
+                data-testid="title-continue-btn"
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  onContinueSavedSession();
+                }}
+                className="px-6 py-3.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-extrabold text-sm tracking-wide shadow-lg cursor-pointer transition-transform active:scale-95 whitespace-nowrap shrink-0"
+              >
+                Tiếp Tục Nhiệm Kỳ
+              </button>
+            )}
+
             <button
               type="button"
               data-start="true"
+              data-testid="title-start-btn"
               onClick={(e) => {
                 e.currentTarget.blur();
                 onStartGame();
               }}
               className="px-7 py-3.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-sm tracking-wide shadow-lg cursor-pointer transition-transform active:scale-95 whitespace-nowrap shrink-0"
             >
-              Bắt Đầu Tự Quy Hoạch [Enter]
+              Bắt Đầu Nhiệm Kỳ [Enter]
             </button>
 
             <button

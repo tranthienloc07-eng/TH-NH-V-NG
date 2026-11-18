@@ -150,7 +150,7 @@
    Cố định thanh HUD dưới cùng tại bottom: 15px; left: 50%; transform: translateX(-50%);
    Chừa lại tối thiểu > 85% không gian thoáng cho bản đồ 3D Three.js */
 .top-bar {
-  max-height: 46px;
+  min-height: 38px;
 }
 
 .bottom-dock {
@@ -233,4 +233,87 @@
     -webkit-overflow-scrolling: touch;
   }
 }
+
+/* ============================================================================
+   SEASONAL VISUAL WEATHER EFFECT LAYER OVER THE 3D VIEWPORT
+   - Mùa Khô (dry): Heat haze shimmer & warm solar glow
+   - Mùa Mưa Bão (monsoon): Subtle slanted rain streaks & cool storm mist
+   - Đỉnh Triều Cường (high_tide): Expanding concentric water ripple overlays
+   ============================================================================ */
+@keyframes weatherRainFall {
+  0% {
+    background-position: 0px 0px, 0px 0px;
+  }
+  100% {
+    background-position: -96px 384px, -48px 256px;
+  }
+}
+
+@keyframes weatherHeatHazeWave {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: translate3d(0, 0, 0) scaleY(1);
+  }
+  50% {
+    opacity: 0.68;
+    transform: translate3d(8px, -4px, 0) scaleY(1.03);
+  }
+}
+
+@keyframes weatherTideRippleExpand {
+  0% {
+    transform: scale(0.35);
+    opacity: 0.65;
+  }
+  75% {
+    opacity: 0.24;
+  }
+  100% {
+    transform: scale(2.15);
+    opacity: 0;
+  }
+}
+
+.weather-monsoon-rain-layer {
+  background-image: repeating-linear-gradient(
+      106deg,
+      rgba(186, 230, 253, 0) 0px,
+      rgba(186, 230, 253, 0) 26px,
+      rgba(186, 230, 253, 0.22) 27px,
+      rgba(186, 230, 253, 0) 28px
+    ),
+    repeating-linear-gradient(
+      106deg,
+      rgba(125, 211, 252, 0) 0px,
+      rgba(125, 211, 252, 0) 41px,
+      rgba(125, 211, 252, 0.16) 42px,
+      rgba(125, 211, 252, 0) 43px
+    );
+  background-size: 192px 384px, 144px 256px;
+  animation: weatherRainFall 0.85s linear infinite;
+}
+
+.weather-dry-heathaze-layer {
+  background: radial-gradient(
+      ellipse 80% 34% at 50% 8%,
+      rgba(251, 191, 36, 0.14) 0%,
+      rgba(245, 158, 11, 0.05) 52%,
+      rgba(251, 191, 36, 0) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(253, 224, 71, 0.07) 0%,
+      rgba(251, 146, 60, 0.03) 35%,
+      rgba(15, 23, 42, 0) 70%,
+      rgba(245, 158, 11, 0.06) 100%
+    );
+  animation: weatherHeatHazeWave 4.5s ease-in-out infinite;
+}
+
+.weather-hightide-ripple-ring {
+  transform-origin: center;
+  animation: weatherTideRippleExpand 3.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
 

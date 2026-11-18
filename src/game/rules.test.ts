@@ -21,6 +21,7 @@ import {
   getRoadConnections,
   getTileDetailedReport,
   GlobalLedger,
+  hasPlayerActuallyPlayed,
   isPolicyUnlockedAtLevel,
   isToolUnlockedAtLevel,
   markSettlementReportRead,
@@ -52,6 +53,11 @@ import {
   sampleRouteAtDistance,
   stepVehicleNavigationAgent,
 } from './roadVehiclePaths';
+import {
+  createWaterShipAgent,
+  generateWaterShipRoutesFromGrid,
+  stepWaterShipAgent,
+} from './navigation/waterPaths';
 
 test('1. Realistic Vietnamese currency & capacity scale (50B start, 8M alley, 65M urban road, 32B apartment, 500k-1M wild land)', () => {
   const state = createInitialGameState(true);
@@ -1534,4 +1540,48 @@ test('20. Master Upgrade: 5-Metric Financial Preview, Pre-flight Risk Check, 3 D
   assert.equal(endlessState.endlessMode, true);
   assert.equal(endlessState.snapshot, null);
 });
+
+test('21. River Water Ship Navigation (Cargo Ship & Commercial Ship) with Wave Bobbing and Stern Wake', () => {
+  const state = createInitialGameState(true);
+  const waterRoutes = generateWaterShipRoutesFromGrid(state.grid);
+  assert.ok(
+    waterRoutes.length >= 2,
+    'Expected at least 2 water ship routes along river_water tiles'
+  );
+
+  const cargoAgent = createWaterShipAgent(waterRoutes[0], 0);
+  const commercialAgent = createWaterShipAgent(waterRoutes[1], 0.35);
+  assert.equal(cargoAgent.route.kind, 'cargo');
+  assert.equal(commercialAgent.route.kind, 'commercial');
+
+  const startDist = cargoAgent.distance;
+  const pose = stepWaterShipAgent(cargoAgent, 0.25);
+  assert.ok(cargoAgent.distance > startDist);
+  assert.ok(Number.isFinite(pose.x) && Number.isFinite(pose.z));
+  assert.ok(Number.isFinite(pose.y) && Number.isFinite(pose.roll));
+  assert.ok(Number.isFinite(pose.sternX) && Number.isFinite(pose.sternZ));
+
+  // Verify fresh unplayed state is NOT treated as played save, and advisor never warns "Có 0 phân khu đang bị ngập nước"
+  const unplayedTitle = createInitialGameState(false);
+  const unplayedAutostart = createInitialGameState(true);
+  assert.equal(hasPlayerActuallyPlayed(unplayedTitle), false);
+  assert.equal(hasPlayerActuallyPlayed(unplayedAutostart), false);
+
+  const playedAfterRoad = applyToolToTile(
+    unplayedAutostart,
+    5,
+    5,
+    'road_urban'
+  ).nextState;
+  assert.equal(hasPlayerActuallyPlayed(playedAfterRoad), true);
+
+  const dryBriefing = generateCityAdvisorBriefing(playedAfterRoad);
+  assert.equal(playedAfterRoad.metrics.floodedTileCount, 0);
+  assert.equal(
+    dryBriefing.diagnostics.some((d) => d.includes('0 phân khu đang bị ngập')),
+    false
+  );
+});
+
+
 

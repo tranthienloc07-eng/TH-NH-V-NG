@@ -292,7 +292,7 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
                 htmlFor="cit-agri-slider"
                 className="flex justify-between text-slate-300 text-[11px]"
               >
-                <span>3. Nông Thủy Sản (agr_farm)</span>
+                <span>3. Nông Nghiệp &amp; Thủy Sản</span>
                 <span className="font-mono tabular-nums font-bold text-emerald-300">
                   {policies.citAgri}%
                 </span>
@@ -478,9 +478,9 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             data-testid="traffic-col-transit"
             className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2.5"
           >
-            <div className="font-semibold text-amber-200 flex justify-between">
+            <div className="font-semibold text-amber-200 flex items-center justify-between gap-2">
               <span>Vận Tải Công Cộng &amp; Thu Phí</span>
-              <span className="font-mono tabular-nums text-sky-300">
+              <span className="font-mono tabular-nums text-sky-300 shrink-0">
                 Tốc độ {metrics.trafficSpeedIndex}%
               </span>
             </div>
@@ -558,16 +558,16 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             data-testid="traffic-col-sidewalk"
             className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2.5"
           >
-            <div className="font-semibold text-amber-200 flex justify-between">
+            <div className="font-semibold text-amber-200 flex items-center justify-between gap-2">
               <span>Kinh Tế Vỉa Hè &amp; Phân Luồng Dân Cư</span>
-              <span className="font-mono tabular-nums text-amber-300">
+              <span className="font-mono tabular-nums text-amber-300 shrink-0">
                 PCCC {metrics.emergencyAccessCoverage}%
               </span>
             </div>
 
             <div className="space-y-1">
               <span className="block text-slate-300 text-[11px]">
-                Chính sách Quản lý Vỉa hè (sidewalkPolicy):
+                Chính sách Quản lý Kinh doanh Vỉa hè:
               </span>
               <div className="grid grid-cols-3 gap-1.5">
                 {(
@@ -643,9 +643,9 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             data-testid="traffic-col-food-showbiz"
             className="rounded-lg bg-[#152231] p-3 border border-slate-700/70 space-y-2"
           >
-            <div className="font-semibold text-amber-200 flex justify-between">
+            <div className="font-semibold text-amber-200 flex items-center justify-between gap-2">
               <span>An Ninh Lương Thực &amp; Showbiz [J]</span>
-              <span className="font-mono tabular-nums text-emerald-300">
+              <span className="font-mono tabular-nums text-emerald-300 shrink-0">
                 Cung ứng {metrics.supplyChainIndex}%
               </span>
             </div>
@@ -660,7 +660,7 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             >
               <div>
                 <div className="text-[11px] font-bold">
-                  Nguồn cung Lương thực (agr_farm):
+                  Nguồn cung Lương thực Nội địa:
                 </div>
                 <div className="text-[10px] opacity-85">
                   Mỗi Nông trại nuôi tối đa 180 dân
