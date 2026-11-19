@@ -11,6 +11,7 @@ import {
   computeCityLevel,
   computeTileEconomics,
   continueEndlessAfterVictory,
+  createBankDeposit,
   createInitialGameState,
   detectGhostCollision,
   DEFAULT_DAY_TICK_MS,
@@ -18,6 +19,8 @@ import {
   evaluatePlacementRisk,
   generateCityAdvisorBriefing,
   getBuildingFinancialPreview,
+  getCreditRatingByPci,
+  getLoanInterestRateByPci,
   getRoadConnections,
   getTileDetailedReport,
   GlobalLedger,
@@ -27,16 +30,22 @@ import {
   markSettlementReportRead,
   MAX_DAY_TICK_MS,
   MIN_DAY_TICK_MS,
+  mortgageReservedLand,
   ONBOARDING_QUESTS,
+  recalculateGridLandValues,
   renameBuildingCustomName,
+  repayBankLoanEarly,
   runEndOfMonthSettlement,
   selectOrUnlockRegion,
   setDayTickInterval,
   STARTING_TREASURY,
   stepSimulationDay,
   stepSimulationMonth,
+  takeBankLoan,
   TOOLS,
   triggerShowbizConcert,
+  unreservePublicLand,
+  withdrawDepositEarly,
 } from './rules';
 import { computeCameraAmbienceProfile } from './audio';
 import {
@@ -1582,6 +1591,289 @@ test('21. River Water Ship Navigation (Cargo Ship & Commercial Ship) with Wave B
     false
   );
 });
+
+test('22. UBND Active Public Admin Unlocks Unemployed Labor Diagnostics in Advisor Briefing', () => {
+  let state = createInitialGameState(true);
+  state.treasury = 200;
+
+  // Build road + residential + UBND
+  state = applyToolToTile(state, 5, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 6, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 5, 4, 'res_high').nextState;
+  state = applyToolToTile(state, 6, 4, 'res_low').nextState;
+  state = applyToolToTile(state, 6, 6, 'pub_admin').nextState;
+
+  // Before UBND completes, hasActivePublicAdmin is false -> no unemployed-per-tier diagnostic
+  assert.equal(state.metrics.hasActivePublicAdmin, false);
+  const beforeBriefing = generateCityAdvisorBriefing(state);
+  assert.equal(
+    beforeBriefing.diagnostics.some((d) => d.includes('Thống kê nhân lực UBND')),
+    false
+  );
+
+  // Complete buildings and populate residents so UBND is fully staffed and unemployed workers exist
+  state.grid[5][5].constructionRemainingDays = 0;
+  state.grid[5][6].constructionRemainingDays = 0;
+  state.grid[4][5].constructionRemainingDays = 0;
+  state.grid[4][5].occupantsByTier = { unskilled: 0, skilled: 40, educated: 60 };
+  state.grid[4][5].currentOccupants = 100;
+  state.grid[4][6].constructionRemainingDays = 0;
+  state.grid[4][6].occupantsByTier = { unskilled: 8, skilled: 0, educated: 0 };
+  state.grid[4][6].currentOccupants = 8;
+  state.grid[6][6].constructionRemainingDays = 0;
+
+  state.metrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+
+  assert.equal(state.metrics.hasActivePublicAdmin, true);
+  assert.ok(state.metrics.labor.unskilled > state.metrics.labor.employedUnskilled);
+  const afterBriefing = generateCityAdvisorBriefing(state);
+  assert.ok(
+    afterBriefing.diagnostics.some((d) => d.includes('Thống kê nhân lực UBND')),
+    'Expected UBND unemployment breakdown in advisor diagnostics'
+  );
+});
+
+test('23. Real Estate Economy Core: LandValue Diffusion, Reserve Public Land (-70% GPMB), 12% Land Use Revenue, Property Tax & Gentrification', () => {
+  let state = createInitialGameState(true);
+  state.treasury = 300;
+
+  const baseLandValue = state.grid[5][5].landValue;
+  // Build road_urban and com_office nearby -> landValue rises via radius-3 diffusion
+  state = applyToolToTile(state, 5, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 6, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 7, 5, 'road_urban').nextState;
+  state = applyToolToTile(state, 5, 4, 'com_office').nextState;
+  recalculateGridLandValues(state.grid);
+
+  const boostedLandValue = state.grid[4][6].landValue;
+  assert.ok(
+    boostedLandValue > baseLandValue,
+    `Expected landValue (${boostedLandValue}) to exceed base (${baseLandValue})`
+  );
+
+  // Reserve public land at (6, 4) -> deducts 100% landValue and marks isReservedPublicLand
+  const treasuryBeforeReserve = state.treasury;
+  const reserveRes = applyToolToTile(state, 6, 4, 'act_reserve_land');
+  assert.equal(reserveRes.success, true);
+  state = reserveRes.nextState;
+  assert.equal(state.grid[4][6].isReservedPublicLand, true);
+  assert.ok(state.treasury < treasuryBeforeReserve);
+
+  // Clearance cost on reserved land gets 70% GPMB discount
+  const unreservedTile = { ...state.grid[4][7], landValue: 10, isReservedPublicLand: false, type: 'res_low' as const };
+  const reservedTile = { ...unreservedTile, isReservedPublicLand: true };
+  const normalClear = calculateLandClearanceCost(unreservedTile, 'fair', 'easy');
+  const discountedClear = calculateLandClearanceCost(reservedTile, 'fair', 'easy');
+  assert.ok(
+    Math.abs(discountedClear.compensationCost - normalClear.compensationCost * 0.3) < 0.01
+  );
+
+  // Building res_high on (7, 4) grants one-time 12% land use revenue
+  const landValAt74 = state.grid[4][7].landValue;
+  const expectedLandUseRev = Number((landValAt74 * 0.12).toFixed(4));
+  const treasuryBeforeResHigh = state.treasury;
+  const resHighBuild = applyToolToTile(state, 7, 4, 'res_high');
+  assert.equal(resHighBuild.success, true);
+  state = resHighBuild.nextState;
+  assert.ok(
+    Math.abs(
+      state.treasury - (treasuryBeforeResHigh - BUILDING_SPECS.res_high.costBillion + expectedLandUseRev)
+    ) < 0.02
+  );
+
+  // Complete res_high & com_office -> monthly property tax (0.8% * landValue) > 0
+  state.grid[4][5].constructionRemainingDays = 0;
+  state.grid[4][7].constructionRemainingDays = 0;
+  state.metrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+  assert.ok((state.metrics.monthlyPropertyTax ?? 0) > 0);
+
+  // Gentrification check: at City Level >= 3, res_low on landValue > 8 without Bus/BRT triggers flag & happiness penalty
+  state.grid[4][7].currentOccupants = 500;
+  state.grid[4][7].occupantsByTier = { unskilled: 0, skilled: 250, educated: 250 };
+  state = applyToolToTile(state, 5, 6, 'res_low').nextState;
+  state.grid[6][5].constructionRemainingDays = 0;
+  state.grid[6][5].landValue = 12;
+  const metricsNoTransit = calculateMacroEconomy(
+    state.grid,
+    { ...state.policies, transitLevel: 0 },
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+  const metricsWithTransit = calculateMacroEconomy(
+    state.grid,
+    { ...state.policies, transitLevel: 1 },
+    state.season,
+    0,
+    state.treasury,
+    0,
+    state.difficulty
+  );
+  assert.ok((metricsNoTransit.highLandValueResLowWithoutTransit ?? 0) >= 1);
+  assert.equal(metricsWithTransit.highLandValueResLowWithoutTransit ?? 0, 0);
+  assert.ok(metricsWithTransit.happiness > metricsNoTransit.happiness);
+});
+
+test('24. CIT Laffer Curve (>18%), Happiness Price Shock, PCI Penalty & Preferential Socialized CIT (5-10%) for Private Edu/Med', () => {
+  let state = createInitialGameState(true);
+  state.treasury = 300;
+
+  for (let x = 4; x <= 8; x++) {
+    state = applyToolToTile(state, x, 5, 'road_urban').nextState;
+  }
+  state = applyToolToTile(state, 4, 4, 'res_high').nextState;
+  state = applyToolToTile(state, 5, 4, 'com_market').nextState;
+  state = applyToolToTile(state, 6, 4, 'priv_school').nextState;
+  state = applyToolToTile(state, 7, 4, 'priv_hospital').nextState;
+
+  for (let x = 4; x <= 7; x++) {
+    state.grid[4][x].constructionRemainingDays = 0;
+  }
+  state.grid[4][4].occupantsByTier = { unskilled: 0, skilled: 150, educated: 150 };
+  state.grid[4][4].currentOccupants = 300;
+  state.grid[4][5].assignedWorkers = { unskilled: 6, skilled: 4, educated: 0 };
+  state.grid[4][6].assignedWorkers = { unskilled: 0, skilled: 6, educated: 14 };
+  state.grid[4][7].assignedWorkers = { unskilled: 2, skilled: 8, educated: 15 };
+
+  // 1. Preferential Socialized CIT for priv_school & priv_hospital: 50% of citMarket, clamped [5%, 10%]
+  const normalPolicies = { ...state.policies, citMarket: 16 }; // 50% = 8%
+  const highPolicies = { ...state.policies, citMarket: 28, citIndustry: 26, citAgri: 20 }; // 50% = 14% -> capped at 10%
+
+  const privSchoolNormal = getTileDetailedReport(state.grid, state.grid[4][6], normalPolicies, state.metrics);
+  const privHospHigh = getTileDetailedReport(state.grid, state.grid[4][7], highPolicies, state.metrics);
+  assert.equal(privSchoolNormal.corporateTaxRate, 8);
+  assert.equal(privHospHigh.corporateTaxRate, 10);
+
+  const previewPrivSchool = getBuildingFinancialPreview('priv_school', highPolicies, 'easy');
+  assert.ok(previewPrivSchool.expectedTaxOrOutputLabel.includes('10% XHH'));
+
+  // 2. Laffer Curve on com_market when citMarket > 18%
+  const laborCounts = { unskilled: 50, skilled: 150, educated: 150 };
+  const econNormal = computeTileEconomics(state.grid, state.grid[4][5], normalPolicies, 70, 100, laborCounts, 0, 'easy');
+  const econHigh = computeTileEconomics(state.grid, state.grid[4][5], highPolicies, 70, 100, laborCounts, 0, 'easy');
+  assert.ok(
+    econHigh.grossOutputBillion < econNormal.grossOutputBillion,
+    'Expected Laffer curve to reduce commercial output when CIT > 18%'
+  );
+
+  // 3. Happiness Price Shock & PCI Penalty when CIT is excessive
+  const macroNormal = calculateMacroEconomy(state.grid, normalPolicies, state.season, 0, state.treasury, 0, state.difficulty);
+  const macroHigh = calculateMacroEconomy(state.grid, highPolicies, state.season, 0, state.treasury, 0, state.difficulty);
+  assert.ok(macroHigh.happiness < macroNormal.happiness, 'Expected CIT price shock to lower happiness');
+  assert.ok(macroHigh.pci < macroNormal.pci, 'Expected excessive CIT to penalize PCI');
+});
+
+test('25. Urban Bank (Loans, PCI Rate, Anti-Arbitrage Deposit Lock, Monthly Settlement) & Land Banking (Unreserve 85%, Mortgage 70% + Liquidation)', () => {
+  let state = createInitialGameState(true);
+  state.treasury = 100;
+
+  // Bank locked at City Level 1
+  assert.equal(isPolicyUnlockedAtLevel('bank', 1), false);
+  const lockedLoan = takeBankLoan(state, 20, 6);
+  assert.equal(lockedLoan.success, false);
+
+  // Unlock Level 2
+  state.cityLevel = 2;
+  assert.equal(isPolicyUnlockedAtLevel('bank', 2), true);
+
+  // PCI credit rating & interest rate tiers
+  assert.equal(getCreditRatingByPci(80).grade, 'AAA');
+  assert.equal(getLoanInterestRateByPci(80), 0.8);
+  assert.equal(getCreditRatingByPci(60).grade, 'BB+');
+  assert.equal(getLoanInterestRateByPci(60), 1.4);
+  assert.equal(getCreditRatingByPci(40).grade, 'C');
+  assert.equal(getLoanInterestRateByPci(40), 2.2);
+
+  // 1. Take a 20B / 6m loan
+  const loanRes = takeBankLoan(state, 20, 6);
+  assert.equal(loanRes.success, true);
+  state = loanRes.nextState;
+  assert.equal(state.treasury, 120);
+  assert.equal(state.loans.length, 1);
+
+  // 2. Anti-arbitrage: cannot create deposit while loan is active
+  const blockedDeposit = createBankDeposit(state, 10, 3);
+  assert.equal(blockedDeposit.success, false);
+  assert.ok(blockedDeposit.message.includes('khoản vay'));
+
+  // 3. Repay loan early -> treasury decreases by principal and loans becomes empty
+  const repayRes = repayBankLoanEarly(state, state.loans[0].id);
+  assert.equal(repayRes.success, true);
+  state = repayRes.nextState;
+  assert.equal(state.loans.length, 0);
+  assert.equal(state.treasury, 100);
+
+  // 4. Create a 10B / 3m deposit and withdraw early (0.1%/month)
+  const depRes = createBankDeposit(state, 10, 3);
+  assert.equal(depRes.success, true);
+  state = depRes.nextState;
+  assert.equal(state.treasury, 90);
+  assert.equal(state.deposits.length, 1);
+
+  // Step 1 month -> deposit accrues monthly interest and remainingMonths decrements
+  state = stepSimulationMonth(state);
+  assert.equal(state.deposits.length, 1);
+  assert.equal(state.deposits[0].remainingMonths, 2);
+  assert.ok(state.deposits[0].accruedInterest > 0);
+
+  const withdrawRes = withdrawDepositEarly(state, state.deposits[0].id);
+  assert.equal(withdrawRes.success, true);
+  state = withdrawRes.nextState;
+  assert.equal(state.deposits.length, 0);
+
+  // 5. Land Banking: Reserve -> Unreserve (85% refund)
+  const reserveA = applyToolToTile(state, 5, 5, 'act_reserve_land');
+  assert.equal(reserveA.success, true);
+  state = reserveA.nextState;
+  const paidA = state.grid[5][5].reservedCostPaid ?? state.grid[5][5].landValue;
+  const treasuryBeforeUnreserve = state.treasury;
+  const unreserveRes = unreservePublicLand(state, 5, 5);
+  assert.equal(unreserveRes.success, true);
+  state = unreserveRes.nextState;
+  assert.equal(state.grid[5][5].isReservedPublicLand, false);
+  assert.ok(
+    Math.abs(state.treasury - (treasuryBeforeUnreserve + paidA * 0.85)) < 0.02
+  );
+
+  // 6. Land Banking: Reserve -> Mortgage (70% at 0.6%/mo, 6m) -> Collateral Liquidation on default at maturity
+  const reserveB = applyToolToTile(state, 6, 6, 'act_reserve_land');
+  assert.equal(reserveB.success, true);
+  state = reserveB.nextState;
+  state.grid[6][6].landValue = 10;
+  const mortRes = mortgageReservedLand(state, 6, 6);
+  assert.equal(mortRes.success, true);
+  state = mortRes.nextState;
+  assert.equal(state.loans.length, 1);
+  assert.equal(state.loans[0].principal, 7);
+  assert.equal(state.loans[0].monthlyRatePercent, 0.6);
+  assert.deepEqual(state.loans[0].collateralTile, { x: 6, z: 6 });
+
+  // Simulate default at maturity (remainingMonths = 1, treasury = 0 -> cannot pay 7B principal -> collateral liquidated)
+  state.loans[0].remainingMonths = 1;
+  state.treasury = 0;
+  state = stepSimulationMonth(state);
+  assert.equal(state.loans.length, 0);
+  assert.equal(state.grid[6][6].isReservedPublicLand, false);
+});
+
 
 
 

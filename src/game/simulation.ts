@@ -28,10 +28,15 @@ import {
   GlobalLedger,
   runEndOfMonthSettlement,
 } from './economy';
-import { createInitialGrid } from './gridSnapping';
+import {
+  createInitialGrid,
+  recalculateGridLandValues,
+} from './gridSnapping';
 import {
   AdvisorBriefing,
   AdvisorRecommendation,
+  BankDeposit,
+  BankLoan,
   CityGameState,
   DifficultyLevel,
   GameStateMode,
@@ -534,6 +539,8 @@ export function createInitialGameState(
     onboardingStep: 1,
     onboardingCompleted: false,
     completedQuests: [],
+    loans: [],
+    deposits: [],
     lastSavedAt: null,
   };
 }
@@ -630,6 +637,8 @@ export function loadGameStateFromLocalStorage(): CityGameState | null {
       completedQuests: Array.isArray(parsed.completedQuests)
         ? parsed.completedQuests
         : [],
+      loans: Array.isArray(parsed.loans) ? parsed.loans : [],
+      deposits: Array.isArray(parsed.deposits) ? parsed.deposits : [],
       lastSavedAt: parsed.lastSavedAt ?? null,
     };
   } catch {
@@ -950,6 +959,8 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     })
   );
 
+  recalculateGridLandValues(nextGrid);
+
   if (!state.isCrisis) {
     for (let i = 0; i < 3; i++) {
       runImmigrationSystemStep(
@@ -989,9 +1000,97 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     preMetrics.pci >= 75 && preMetrics.population > 0 && !state.isCrisis
       ? 2.5
       : 0;
-  const nextTreasury = Number(
+  let runningTreasury = Number(
     (state.treasury + preMetrics.netBalance + fdiBonus).toFixed(4)
   );
+
+  // Xử lý Ngân hàng Đô thị cuối tháng: Thu trả góp vay, thanh lý tài sản đảm bảo nếu vỡ nợ đáo hạn, cộng lãi/tất toán sổ tiết kiệm
+  let monthlyBankNet = 0;
+  const bankEventNotes: string[] = [];
+  const nextLoans: BankLoan[] = [];
+
+  for (const loan of state.loans ?? []) {
+    const interest = Number(
+      (loan.remainingPrincipal * (loan.monthlyRatePercent / 100)).toFixed(4)
+    );
+    const principalPayment =
+      loan.remainingMonths <= 1
+        ? loan.remainingPrincipal
+        : Number(
+            Math.min(
+              loan.remainingPrincipal,
+              loan.principal / Math.max(1, loan.totalMonths)
+            ).toFixed(4)
+          );
+    const installment = Number((principalPayment + interest).toFixed(4));
+
+    // Nếu khoản vay thế chấp đất đáo hạn mà ngân sách không đủ trả -> thanh lý tài sản đảm bảo
+    if (
+      loan.collateralTile &&
+      loan.remainingMonths <= 1 &&
+      runningTreasury < installment
+    ) {
+      const { x: cx, z: cz } = loan.collateralTile;
+      if (
+        cz >= 0 &&
+        cz < nextGrid.length &&
+        cx >= 0 &&
+        cx < nextGrid[cz].length
+      ) {
+        nextGrid[cz][cx].isReservedPublicLand = false;
+        nextGrid[cz][cx].reservedCostPaid = undefined;
+      }
+      bankEventNotes.push(
+        `Ngân hàng đã thanh lý Quỹ đất công (${cx + 1}, ${cz + 1}) do quá hạn khoản vay thế chấp!`
+      );
+      continue;
+    }
+
+    runningTreasury = Number((runningTreasury - installment).toFixed(4));
+    monthlyBankNet = Number((monthlyBankNet - installment).toFixed(4));
+
+    const newRemainingPrincipal = Number(
+      Math.max(0, loan.remainingPrincipal - principalPayment).toFixed(4)
+    );
+    const newRemainingMonths = Math.max(0, loan.remainingMonths - 1);
+    if (newRemainingMonths > 0 && newRemainingPrincipal > 0.0001) {
+      nextLoans.push({
+        ...loan,
+        remainingPrincipal: newRemainingPrincipal,
+        remainingMonths: newRemainingMonths,
+      });
+    } else if (loan.collateralTile) {
+      bankEventNotes.push(
+        `Đã trả xong khoản vay thế chấp ô đất (${loan.collateralTile.x + 1}, ${loan.collateralTile.z + 1}).`
+      );
+    }
+  }
+
+  const nextDeposits: BankDeposit[] = [];
+  for (const dep of state.deposits ?? []) {
+    const monthlyInterest = Number(
+      (dep.amount * (dep.monthlyRatePercent / 100)).toFixed(4)
+    );
+    const nextAccrued = Number((dep.accruedInterest + monthlyInterest).toFixed(4));
+    const nextRemainingMonths = Math.max(0, dep.remainingMonths - 1);
+    if (nextRemainingMonths <= 0) {
+      const payout = Number((dep.amount + nextAccrued).toFixed(4));
+      runningTreasury = Number((runningTreasury + payout).toFixed(4));
+      monthlyBankNet = Number((monthlyBankNet + payout).toFixed(4));
+      bankEventNotes.push(
+        `Sổ tiết kiệm đáo hạn: nhận gốc + lãi +${formatVnd(payout, true)}.`
+      );
+    } else {
+      nextDeposits.push({
+        ...dep,
+        remainingMonths: nextRemainingMonths,
+        accruedInterest: nextAccrued,
+      });
+    }
+  }
+
+  const nextTreasury = runningTreasury;
+  const roundedBankNet = Number(monthlyBankNet.toFixed(3));
 
   // Duy nhất 1 lần chốt sổ chuẩn xác khi chuyển tháng trong stepSimulationMonth
   const settlementEntry = runEndOfMonthSettlement(
@@ -1006,6 +1105,13 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     state.activeConcertMonths,
     state.difficulty
   );
+  settlementEntry.monthlyBankNet = roundedBankNet;
+  if (roundedBankNet !== 0) {
+    settlementEntry.netIncome = Number(
+      (settlementEntry.netIncome + roundedBankNet).toFixed(2)
+    );
+    settlementEntry.summary += ` · Ngân hàng ${roundedBankNet >= 0 ? '+' : ''}${formatVnd(roundedBankNet)}`;
+  }
   const existingLedger = (state.globalLedger ?? []).filter(
     (e) => e.id !== settlementEntry.id
   );
@@ -1101,6 +1207,7 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     nextCrisisMonthsElapsed,
     state.difficulty
   );
+  nextMetrics.monthlyBankNet = roundedBankNet;
 
   const prevLevel = state.cityLevel ?? 1;
   const nextCityLevel = computeCityLevel(
@@ -1219,7 +1326,13 @@ export function stepSimulationMonth(state: CityGameState): CityGameState {
     onboardingStep: obEval.onboardingStep,
     onboardingCompleted: obEval.onboardingCompleted,
     completedQuests: obEval.completedQuests,
+    loans: nextLoans,
+    deposits: nextDeposits,
   };
+
+  if (bankEventNotes.length > 0 && !nextIsCrisis) {
+    nextState.lastEventBanner = `${bankEventNotes[0]} · ${nextState.lastEventBanner}`;
+  }
 
   const savedAt = saveGameStateToLocalStorage(nextState);
   nextState.lastSavedAt = savedAt;
@@ -1361,6 +1474,48 @@ export function generateCityAdvisorBriefing(
 
   const diagnostics: string[] = [];
   const recommendations: AdvisorRecommendation[] = [];
+
+  if (metrics.hasActivePublicAdmin) {
+    const unempUnskilled = Math.max(
+      0,
+      metrics.labor.unskilled - metrics.labor.employedUnskilled
+    );
+    const unempSkilled = Math.max(
+      0,
+      metrics.labor.skilled - metrics.labor.employedSkilled
+    );
+    const unempEducated = Math.max(
+      0,
+      metrics.labor.educated - metrics.labor.employedEducated
+    );
+    diagnostics.push(
+      `Thống kê nhân lực UBND (Chưa có việc): Phổ thông ${unempUnskilled} · Trung cấp ${unempSkilled} · Bằng cấp ${unempEducated} người.`
+    );
+  }
+
+  const activeTransitLevel =
+    policies.transitLevel ?? (policies.subsidizeBusTransit ? 1 : 0);
+  const highValueResLowCount = metrics.highLandValueResLowWithoutTransit ?? 0;
+  if (
+    (state.cityLevel ?? 1) >= 3 &&
+    highValueResLowCount > 0 &&
+    activeTransitLevel === 0
+  ) {
+    diagnostics.push(
+      `Áp lực giãn dân: Có ${highValueResLowCount} khu Nhà Ống nằm tại vùng giá đất > 8 Tỷ VNĐ nhưng chưa có Bus/BRT, làm giảm Hạnh phúc cư dân.`
+    );
+    recommendations.push({
+      id: 'rec_gentrification_bus_brt',
+      priority: 'high',
+      title: 'Bật Tuyến Xe Bus / BRT Hỗ Trợ Giãn Dân Vùng Giá Đất Cao',
+      analysis:
+        'Kích hoạt Bus Trợ Giá hoặc BRT Nhanh giúp người dân vùng giá đất cao đi làm thuận tiện và xóa điểm trừ Hạnh phúc giãn dân.',
+      actionLabel: 'Bật Bus Trợ Giá',
+      actionType: 'adjust_policy',
+      policyKey: 'transitLevel',
+      policyValue: 1,
+    });
+  }
 
   if (state.isCrisis || metrics.happiness < 40 || metrics.socialStability < 30) {
     diagnostics.push(
@@ -1563,7 +1718,7 @@ export function generateCityAdvisorBriefing(
     financialSummary,
     topTaxContributor,
     heaviestUpkeepEntity,
-    diagnostics: diagnostics.slice(0, 3),
+    diagnostics: diagnostics.slice(0, 5),
     recommendations: recommendations.slice(0, 3),
   };
 }

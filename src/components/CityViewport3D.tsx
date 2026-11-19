@@ -53,6 +53,7 @@ import {
 } from '../game/types';
 
 export type GraphicQuality = 'high' | 'medium';
+export type HeatmapMode = 'none' | 'land_value';
 
 export interface HoverTileInfo {
   x: number;
@@ -64,6 +65,7 @@ export interface HoverTileInfo {
 interface CityViewport3DProps {
   gameState: CityGameState;
   graphicQuality: GraphicQuality;
+  heatmapMode?: HeatmapMode;
   onDetectSoftwareGl?: (isSoftwareGl: boolean) => void;
   onTileClick: (x: number, z: number) => void;
   onTileRightClick: (x: number, z: number, clientX: number, clientY: number) => void;
@@ -122,6 +124,7 @@ const _colNightHemiGround = new THREE.Color(0x050811);
 export const CityViewport3D: React.FC<CityViewport3DProps> = ({
   gameState,
   graphicQuality,
+  heatmapMode = 'none',
   onDetectSoftwareGl,
   onTileClick,
   onTileRightClick,
@@ -132,6 +135,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<CityGameState>(gameState);
   const graphicQualityRef = useRef<GraphicQuality>(graphicQuality);
+  const heatmapModeRef = useRef<HeatmapMode>(heatmapMode);
   const onDetectSoftwareGlRef = useRef(onDetectSoftwareGl);
   const onTileClickRef = useRef(onTileClick);
   const onTileRightClickRef = useRef(onTileRightClick);
@@ -139,6 +143,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
 
   stateRef.current = gameState;
   graphicQualityRef.current = graphicQuality;
+  heatmapModeRef.current = heatmapMode;
   onDetectSoftwareGlRef.current = onDetectSoftwareGl;
   onTileClickRef.current = onTileClick;
   onTileRightClickRef.current = onTileRightClick;
@@ -159,6 +164,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     gameState.season,
     gameState.policies.transitLevel,
     gameState.policies.banTrucksInResidential,
+    heatmapMode,
   ]);
 
   useEffect(() => {
@@ -183,7 +189,8 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       const color =
         gameState.selectedTool === 'act_clearance'
           ? 0xf97316
-          : gameState.selectedTool === 'sub_drainage'
+          : gameState.selectedTool === 'sub_drainage' ||
+            gameState.selectedTool === 'act_reserve_land'
           ? 0x06b6d4
           : 0xfacc15;
       triggerJuiceRef.current(wx, wz, color);
@@ -655,6 +662,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     const tileProxies: THREE.Mesh[] = [];
     const tileBaseMeshes: THREE.Mesh[][] = [];
     const floodWaterMeshes: THREE.Mesh[][] = [];
+    const reservedMarkerGroups: THREE.Group[][] = [];
     const tileGeo = new THREE.BoxGeometry(
       TILE_WORLD_SIZE - 0.06,
       0.35,
@@ -676,6 +684,24 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       polygonOffsetUnits: -1,
     });
 
+    // Khung viền & cọc mốc màu xanh ngọc (0x06b6d4) cho các ô đã khoanh Quỹ Đất Công
+    const reservedBorderGeo = new THREE.RingGeometry(
+      TILE_WORLD_SIZE * 0.42,
+      TILE_WORLD_SIZE * 0.48,
+      4
+    );
+    reservedBorderGeo.rotateX(-Math.PI / 2);
+    reservedBorderGeo.rotateY(Math.PI / 4);
+    const reservedPostGeo = new THREE.BoxGeometry(0.11, 0.34, 0.11);
+    const reservedCyanMat = new THREE.MeshStandardMaterial({
+      color: 0x06b6d4,
+      roughness: 0.45,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.86,
+      side: THREE.DoubleSide,
+    });
+
     const boardGroup = new THREE.Group();
     scene.add(boardGroup);
 
@@ -695,6 +721,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     for (let z = 0; z < GRID_SIZE; z++) {
       tileBaseMeshes[z] = [];
       floodWaterMeshes[z] = [];
+      reservedMarkerGroups[z] = [];
       for (let x = 0; x < GRID_SIZE; x++) {
         const wx = x * TILE_WORLD_SIZE - halfBoard + TILE_WORLD_SIZE / 2;
         const wz = z * TILE_WORLD_SIZE - halfBoard + TILE_WORLD_SIZE / 2;
@@ -719,6 +746,27 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
         floodMesh.visible = false;
         boardGroup.add(floodMesh);
         floodWaterMeshes[z][x] = floodMesh;
+
+        const markerGroup = new THREE.Group();
+        const borderMesh = new THREE.Mesh(reservedBorderGeo, reservedCyanMat);
+        borderMesh.position.y = 0.02;
+        markerGroup.add(borderMesh);
+        const cornerOffset = TILE_WORLD_SIZE * 0.42;
+        const corners = [
+          [-cornerOffset, -cornerOffset],
+          [cornerOffset, -cornerOffset],
+          [-cornerOffset, cornerOffset],
+          [cornerOffset, cornerOffset],
+        ];
+        for (const [cx, cz] of corners) {
+          const post = new THREE.Mesh(reservedPostGeo, reservedCyanMat);
+          post.position.set(cx, 0.17, cz);
+          markerGroup.add(post);
+        }
+        markerGroup.position.set(wx, 0, wz);
+        markerGroup.visible = false;
+        boardGroup.add(markerGroup);
+        reservedMarkerGroups[z][x] = markerGroup;
       }
     }
 
@@ -1044,6 +1092,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
         stateRef.current.mode !== 'playing' ||
         tool === 'inspect' ||
         tool === 'act_clearance' ||
+        tool === 'act_reserve_land' ||
         tool === 'sub_drainage'
       ) {
         disposeGhostPreview();
@@ -1397,10 +1446,13 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
                 }
               : undefined;
 
+          const activeHeatmap = heatmapModeRef.current;
           const tileKey = `${x},${z}`;
-          const tileSig = `${season}|${tile.type}|${tile.elevation}|${
+          const tileSig = `${season}|${activeHeatmap}|${tile.type}|${tile.elevation}|${
             tile.isFlooded ? 1 : 0
-          }|${tile.hasDrainage ? 1 : 0}|${tile.constructionRemainingDays}|${
+          }|${tile.hasDrainage ? 1 : 0}|${tile.isReservedPublicLand ? 1 : 0}|${
+            activeHeatmap === 'land_value' ? tile.landValue.toFixed(1) : ''
+          }|${tile.constructionRemainingDays}|${
             tile.constructionTotalDays
           }|${tile.sidewalkVendors ? 1 : 0}|${
             tile.disputeTurns > 0 ? 1 : 0
@@ -1430,17 +1482,36 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
             baseMat.metalness = 0.55;
             // Đáy/khối nước ở y = -0.435 (mặt trên = -0.26, khớp cao độ mặt nước bình thường)
             baseMesh.position.y = season === 'high_tide' ? -0.275 : -0.435;
-          } else if (tile.type === 'lowland_marsh') {
-            baseMat.color.setHex(0x274e37);
-            baseMat.roughness = 0.88;
-            baseMat.metalness = 0.05;
-            // Mặt trên của lowland_marsh ở -0.235 + 0.175 = -0.06 (cao hơn mặt nước sông -0.26 đúng 0.20 đơn vị >= 0.15)
-            baseMesh.position.y = -0.235;
           } else {
-            baseMat.color.setHex(tile.elevation === 2 ? 0x3b593f : 0x2f4f38);
-            baseMat.roughness = 0.85;
-            baseMat.metalness = 0.05;
-            baseMesh.position.y = tile.elevation === 2 ? -0.1 : -0.175;
+            if (tile.type === 'lowland_marsh') {
+              baseMesh.position.y = -0.235;
+            } else {
+              baseMesh.position.y = tile.elevation === 2 ? -0.1 : -0.175;
+            }
+
+            if (activeHeatmap === 'land_value') {
+              // Bản đồ Nhiệt Giá Đất: <1 Tỷ Xám · 1–5 Tỷ Xanh · 5–15 Tỷ Vàng · >15 Tỷ Đỏ cam
+              const lv = tile.landValue;
+              const heatmapHex =
+                lv > 15
+                  ? 0xea580c
+                  : lv >= 5
+                  ? 0xf59e0b
+                  : lv >= 1
+                  ? 0x10b981
+                  : 0x64748b;
+              baseMat.color.setHex(heatmapHex);
+              baseMat.roughness = 0.72;
+              baseMat.metalness = 0.08;
+            } else if (tile.type === 'lowland_marsh') {
+              baseMat.color.setHex(0x274e37);
+              baseMat.roughness = 0.88;
+              baseMat.metalness = 0.05;
+            } else {
+              baseMat.color.setHex(tile.elevation === 2 ? 0x3b593f : 0x2f4f38);
+              baseMat.roughness = 0.85;
+              baseMat.metalness = 0.05;
+            }
           }
 
           // Chỉ hiện lớp nước ngập khi tile.isFlooded === true trên các ô đất liền
@@ -1448,6 +1519,12 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
             Boolean(tile.isFlooded) && tile.type !== 'river_water';
           floodWaterMeshes[z][x].position.y = baseMesh.position.y + 0.185;
           floodWaterMeshes[z][x].visible = isTileFlooded;
+
+          // Khung viền & cọc mốc Quỹ Đất Công (cyan 0x06b6d4)
+          const markerGroup = reservedMarkerGroups[z][x];
+          markerGroup.position.y = baseMesh.position.y + 0.178;
+          markerGroup.visible =
+            Boolean(tile.isReservedPublicLand) && tile.type !== 'river_water';
 
           const prevStruct = tileStructGroupMap.get(tileKey);
           if (prevStruct) {

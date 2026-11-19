@@ -22,6 +22,8 @@ import {
   TILE_LABELS,
 } from './constants';
 import {
+  BankDeposit,
+  BankLoan,
   CityGameState,
   DifficultyLevel,
   EntityLedgerRecord,
@@ -700,7 +702,12 @@ export function computeTileEconomics(
       (brainDrainActive ? 0.7 : 1.0) *
       (0.85 + (localSupplyIndex / 100) * 0.15);
   } else if (tile.type === 'priv_hospital' || tile.type === 'priv_school') {
-    citRate = policies.citMarket;
+    // Ưu đãi thuế Xã hội hóa Y tế & Giáo dục: bằng 50% thuế Thương mại, tối đa 10% (tối thiểu 5%)
+    const eduMedCitRate = Math.min(
+      10,
+      Math.max(5, Math.round(policies.citMarket * 0.5))
+    );
+    citRate = eduMedCitRate;
     extraMultiplier = privateSuitability.multiplier;
   } else if (tile.type === 'ind_fdi') {
     citRate = policies.citFdi;
@@ -709,6 +716,21 @@ export function computeTileEconomics(
     citRate = policies.citShowbiz;
     extraMultiplier = concertMultiplier;
   }
+
+  // Đường cong Laffer: khi citRate > 18% (citMarket, citIndustry, citAgri, citShowbiz), doanh nghiệp thu hẹp sản lượng
+  const isLafferAffectedType =
+    tile.type === 'agr_farm' ||
+    tile.type === 'ind_food' ||
+    tile.type === 'ind_factory' ||
+    tile.type === 'com_market' ||
+    tile.type === 'com_street' ||
+    tile.type === 'com_mall' ||
+    tile.type === 'com_office' ||
+    tile.type === 'showbiz_stadium';
+  const lafferMultiplier =
+    isLafferAffectedType && citRate > 18
+      ? Math.max(0.45, 1 - (citRate - 18) * 0.035)
+      : 1.0;
 
   let grossOutputBillion = 0;
   let citRevenueBillion = 0;
@@ -721,7 +743,8 @@ export function computeTileEconomics(
         supplyFactor *
         roadBonus *
         extraMultiplier *
-        utilityOverloadOutputMultiplier
+        utilityOverloadOutputMultiplier *
+        lafferMultiplier
       ).toFixed(3)
     );
     citRevenueBillion = Number(
@@ -963,27 +986,37 @@ export function getTileDetailedReport(
         dominantLaborLabel =
           'Yêu cầu Bác sĩ công lập, Điều dưỡng & Hộ lý · Tối đa hóa An sinh xã hội';
         break;
-      case 'priv_hospital':
+      case 'priv_hospital': {
+        const eduMedCitRate = Math.min(
+          10,
+          Math.max(5, Math.round(policies.citMarket * 0.5))
+        );
         categoryLabel = 'Nhóm Y Tế · Khối Tư Nhân (Doanh nghiệp Y tế Tự chủ)';
         dominantLaborLabel =
-          'Thu viện phí thương mại & đóng thuế CIT · Đòi hỏi cư dân có thu nhập tương xứng';
+          'Thu viện phí thương mại & đóng thuế CIT ưu đãi XHH · Đòi hỏi cư dân có thu nhập tương xứng';
         corporateTaxKey = 'citMarket';
-        corporateTaxLabel = 'Thuế TNDN Dịch vụ Y tế Tư nhân (CIT)';
-        corporateTaxRate = policies.citMarket;
+        corporateTaxLabel = 'Thuế TNDN Xã hội hóa (50% Thương mại, tối đa 10%)';
+        corporateTaxRate = eduMedCitRate;
         break;
+      }
       case 'pub_school':
         categoryLabel = 'Nhóm Giáo Dục · Khối Công Lập (Ngân sách vận hành)';
         dominantLaborLabel =
           'Yêu cầu Giáo viên biên chế & Nhân viên trường học · Tăng mạnh Hạnh phúc';
         break;
-      case 'priv_school':
+      case 'priv_school': {
+        const eduMedCitRate = Math.min(
+          10,
+          Math.max(5, Math.round(policies.citMarket * 0.5))
+        );
         categoryLabel = 'Nhóm Giáo Dục · Khối Tư Nhân (Trường Quốc tế / Tư thục)';
         dominantLaborLabel =
-          'Học phí cao, tự chủ tài chính & đóng thuế CIT · Đòi hỏi cư dân thu nhập cao';
+          'Học phí cao, tự chủ tài chính & đóng thuế CIT ưu đãi XHH · Đòi hỏi cư dân thu nhập cao';
         corporateTaxKey = 'citMarket';
-        corporateTaxLabel = 'Thuế TNDN Giáo dục Tư thục / Quốc tế (CIT)';
-        corporateTaxRate = policies.citMarket;
+        corporateTaxLabel = 'Thuế TNDN Xã hội hóa (50% Thương mại, tối đa 10%)';
+        corporateTaxRate = eduMedCitRate;
         break;
+      }
       default:
         categoryLabel = 'Hạ Tầng Công Cộng & An Sinh';
         dominantLaborLabel = 'Cán bộ hành chính, kỹ sư điện nước & chiến sĩ PCCC';
@@ -1311,7 +1344,11 @@ export function calculatePCI(
     (policies.compensationLevel === 'low' ? 12 : 0);
   const pciAdminScore = Math.max(15, Math.min(100, Math.round(rawAdmin)));
 
-  const rawTax = 100 - Math.max(0, policies.citFdi - 5) * 3.2;
+  const rawTax =
+    100 -
+    Math.max(0, policies.citFdi - 5) * 3.2 -
+    Math.max(0, policies.citIndustry - 18) * 0.8 -
+    Math.max(0, policies.citMarket - 18) * 0.6;
   const pciTaxScore = Math.max(10, Math.min(100, Math.round(rawTax)));
 
   const basePci = Math.round(
@@ -1679,6 +1716,8 @@ export function calculateMacroEconomy(
   let totalCitRevenue = 0;
   let totalResidentPitRevenue = 0;
   let totalMaintenance = 0;
+  let rawPropertyTax = 0;
+  let highLandValueResLowCount = 0;
 
   for (let z = 0; z < grid.length; z++) {
     for (let x = 0; x < grid[z].length; x++) {
@@ -1691,6 +1730,21 @@ export function calculateMacroEconomy(
         t.maintenanceCost = 0;
         t.netIncome = 0;
         continue;
+      }
+
+      if (t.constructionRemainingDays === 0) {
+        if (
+          t.type === 'res_high' ||
+          t.type === 'com_street' ||
+          t.type === 'com_market' ||
+          t.type === 'com_mall' ||
+          t.type === 'com_office'
+        ) {
+          rawPropertyTax += 0.008 * t.landValue;
+        }
+        if (t.type === 'res_low' && t.landValue > 8) {
+          highLandValueResLowCount++;
+        }
       }
 
       const econ = computeTileEconomics(
@@ -1715,6 +1769,12 @@ export function calculateMacroEconomy(
       t.netIncome = econ.netIncomeBillion;
     }
   }
+
+  const monthlyPropertyTax = Number(
+    (rawPropertyTax * infraStatus.taxCollectionMultiplier).toFixed(3)
+  );
+  const highLandValueResLowWithoutTransit =
+    population >= 450 && transitLevel === 0 ? highLandValueResLowCount : 0;
 
   const rawEmployedPitRevenue =
     jobResult.totalEmployed.unskilled * 0.012 * (policies.pitLow / 100) +
@@ -1750,6 +1810,7 @@ export function calculateMacroEconomy(
     (
       pitRevenue +
       totalCitRevenue +
+      monthlyPropertyTax +
       tollboothRevenue +
       sidewalkLicenseRevenue
     ).toFixed(2)
@@ -1830,12 +1891,21 @@ export function calculateMacroEconomy(
   const foodShortagePenalty =
     agriCount > 0 && population > 0 && foodSupplyPercent < 100 ? 6 : 0;
 
+  // Lạm phát giá tiêu dùng khi thuế CIT Chợ/Bán lẻ (>14%) hoặc Nông sản (>12%) quá cao
+  const citPriceShock =
+    Math.max(0, policies.citMarket - 14) * 1.2 +
+    Math.max(0, policies.citAgri - 12) * 1.0;
+
+  // Áp lực giãn dân ở City Level >= 3: nhà ống res_low ở vùng giá đất > 8 Tỷ nhưng chưa bật Bus/BRT
+  const gentrificationPenalty = Math.min(12, highLandValueResLowWithoutTransit * 2);
+
   const rawHappiness =
     builtCount === 0
       ? 85 +
         (policies.welfareLevel - 50) * 0.35 +
         pitHappinessRelief +
-        compensationHappinessBonus
+        compensationHappinessBonus -
+        citPriceShock
       : 70 +
         sidewalkHappinessBonus +
         marketCount * 3 +
@@ -1844,6 +1914,8 @@ export function calculateMacroEconomy(
         (policies.welfareLevel - 40) * 0.35 +
         pitHappinessRelief +
         compensationHappinessBonus -
+        citPriceShock -
+        gentrificationPenalty -
         floodedTileCount * 5 -
         disputeTiles * 8 -
         jobResult.staffShortageBuildings * 3 -
@@ -1935,6 +2007,10 @@ export function calculateMacroEconomy(
     pollutionPenaltyHappiness,
     totalRegionalPopulation: population,
     totalRegionalJobs: totalEmployed,
+    monthlyPropertyTax,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: 0,
+    highLandValueResLowWithoutTransit,
   };
 }
 
@@ -2086,6 +2162,7 @@ export function runEndOfMonthSettlement(
   const tollAndSidewalkRev = Number(
     ((metrics.tollboothRevenue ?? 0) + (metrics.sidewalkLicenseRevenue ?? 0)).toFixed(3)
   );
+  const monthlyPropertyTax = Number((metrics.monthlyPropertyTax ?? 0).toFixed(3));
   const transitCost = Number((metrics.transitUpkeep ?? 0).toFixed(3));
 
   const welfareCost =
@@ -2102,7 +2179,9 @@ export function runEndOfMonthSettlement(
     (welfareCost + floodDamageCost).toFixed(2)
   );
 
-  const roundedRev = Number((totalRevenue + tollAndSidewalkRev).toFixed(2));
+  const roundedRev = Number(
+    (totalRevenue + tollAndSidewalkRev + monthlyPropertyTax).toFixed(2)
+  );
   const roundedCit = Number((totalTaxCIT + tollAndSidewalkRev).toFixed(2));
   const roundedPit = Number(totalTaxPIT.toFixed(2));
   const buildingMaintenanceCost = Number(rawBuildingMaint.toFixed(3));
@@ -2114,6 +2193,7 @@ export function runEndOfMonthSettlement(
     (
       roundedCit +
       roundedPit +
+      monthlyPropertyTax +
       fdiBonus -
       roundedMaint -
       welfareAndFloodCost
@@ -2123,6 +2203,10 @@ export function runEndOfMonthSettlement(
   const adminTaxNote = infraStatus.hasActivePublicAdmin
     ? 'Hiệu lực thu thuế 100% (UBND chống thất thoát)'
     : 'Thất thoát hành chính 12% (Thiếu UBND vận hành)';
+  const propertyTaxNote =
+    monthlyPropertyTax > 0
+      ? `, Thuế BĐS +${formatVnd(monthlyPropertyTax)}`
+      : '';
 
   return {
     id: `SETTLE-Y${year}-M${month}`,
@@ -2131,7 +2215,7 @@ export function runEndOfMonthSettlement(
     year,
     season,
     entryType: 'monthly_settlement',
-    summary: `Quyết toán cuối tháng T${month}/${year} (Ngày 30): Thu CIT +${formatVnd(roundedCit)}, Thu PIT +${formatVnd(roundedPit)} (${adminTaxNote}), Phí duy trì -${formatVnd(roundedMaint + welfareAndFloodCost)} · Ròng ${netIncome >= 0 ? '+' : ''}${formatVnd(netIncome)}`,
+    summary: `Quyết toán cuối tháng T${month}/${year} (Ngày 30): Thu CIT +${formatVnd(roundedCit)}, Thu PIT +${formatVnd(roundedPit)}${propertyTaxNote} (${adminTaxNote}), Phí duy trì -${formatVnd(roundedMaint + welfareAndFloodCost)} · Ròng ${netIncome >= 0 ? '+' : ''}${formatVnd(netIncome)}`,
     totalRevenue: roundedRev,
     totalTaxCIT: roundedCit,
     totalTaxPIT: roundedPit,
@@ -2140,10 +2224,383 @@ export function runEndOfMonthSettlement(
     infraMaintenanceCost,
     welfareAndFloodCost,
     fdiBonus,
+    monthlyPropertyTax,
+    monthlyLandUseRevenue: Number((metrics.monthlyLandUseRevenue ?? 0).toFixed(3)),
+    monthlyBankNet: 0,
     netIncome,
     treasuryAfter,
     roadAndDrainageTileCount,
     activeEntityCount,
     entityBreakdown,
+  };
+}
+
+// ============================================================================
+// HỆ THỐNG NGÂN HÀNG ĐÔ THỊ (URBAN BANK: VAY VỐN ĐẦU TƯ & GỬI TIẾT KIỆM)
+// ============================================================================
+
+export function getLoanInterestRateByPci(pci: number): number {
+  if (pci >= 75) return 0.8;
+  if (pci >= 55) return 1.4;
+  return 2.2;
+}
+
+export function getCreditRatingByPci(pci: number): {
+  grade: string;
+  label: string;
+  ratePercent: number;
+} {
+  if (pci >= 75) {
+    return { grade: 'AAA', label: 'Tín nhiệm Vàng (Ưu đãi thấp nhất)', ratePercent: 0.8 };
+  }
+  if (pci >= 55) {
+    return { grade: 'BB+', label: 'Tín nhiệm Trung bình', ratePercent: 1.4 };
+  }
+  return { grade: 'C', label: 'Rủi ro cao (Lãi suất phạt)', ratePercent: 2.2 };
+}
+
+export interface BankOperationResult {
+  nextState: CityGameState;
+  success: boolean;
+  message: string;
+}
+
+export function takeBankLoan(
+  state: CityGameState,
+  amount: number,
+  months: 6 | 12,
+  bypassLevelLock = false
+): BankOperationResult {
+  if (!bypassLevelLock && (state.cityLevel ?? 1) < 2) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Ngân hàng Đô thị mở khóa từ City Level 2 (150 dân).',
+    };
+  }
+  if (amount <= 0) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Số tiền vay không hợp lệ.',
+    };
+  }
+
+  const ratePercent = getLoanInterestRateByPci(state.metrics.pci);
+  const newLoan: BankLoan = {
+    id: `LOAN-Y${state.year}-M${state.month}-D${state.day}-${((state.loans?.length ?? 0) + 1)}-${Date.now().toString(36).slice(-3)}`,
+    principal: amount,
+    remainingPrincipal: amount,
+    monthlyRatePercent: ratePercent,
+    totalMonths: months,
+    remainingMonths: months,
+  };
+
+  const nextTreasury = Number((state.treasury + amount).toFixed(4));
+  const nextLoans = [...(state.loans ?? []), newLoan];
+  const nextMetrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+
+  const entry: LedgerEntry = {
+    id: `BANK-LOAN-${newLoan.id}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Ngân hàng Đô thị: Giải ngân vay +${formatVnd(amount, true)} (kỳ hạn ${months} tháng · ${ratePercent}%/tháng)`,
+    totalRevenue: amount,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: 0,
+    buildingMaintenanceCost: 0,
+    infraMaintenanceCost: 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: amount,
+    netIncome: amount,
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: 0,
+    activeEntityCount: 1,
+    entityBreakdown: [],
+  };
+  const nextGlobalLedger = [...(state.globalLedger ?? []), entry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      loans: nextLoans,
+      metrics: nextMetrics,
+      globalLedger: nextGlobalLedger,
+      lastEventBanner: `🏦 Ngân hàng Đô thị giải ngân gói vay +${formatVnd(amount, true)} (${months} tháng, lãi suất ${ratePercent}%/tháng theo PCI ${state.metrics.pci}).`,
+    },
+    success: true,
+    message: `Đã vay +${formatVnd(amount, true)} thành công`,
+  };
+}
+
+export function repayBankLoanEarly(
+  state: CityGameState,
+  loanId: string
+): BankOperationResult {
+  const existingLoans = state.loans ?? [];
+  const target = existingLoans.find((l) => l.id === loanId);
+  if (!target) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Không tìm thấy khoản vay cần tất toán.',
+    };
+  }
+
+  const payoff = Number(target.remainingPrincipal.toFixed(4));
+  if (state.treasury < payoff) {
+    return {
+      nextState: {
+        ...state,
+        lastEventBanner: `Ngân sách không đủ để tất toán sớm! Cần ${formatVnd(payoff, true)} nhưng hiện chỉ có ${formatVnd(state.treasury, true)}.`,
+      },
+      success: false,
+      message: 'Ngân sách không đủ để tất toán sớm.',
+    };
+  }
+
+  const nextTreasury = Number((state.treasury - payoff).toFixed(4));
+  const nextLoans = existingLoans.filter((l) => l.id !== loanId);
+  const nextMetrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+
+  const entry: LedgerEntry = {
+    id: `BANK-REPAY-${loanId}-${state.day}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Ngân hàng Đô thị: Tất toán sớm khoản vay ${loanId} (-${formatVnd(payoff, true)})`,
+    totalRevenue: 0,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: payoff,
+    buildingMaintenanceCost: 0,
+    infraMaintenanceCost: 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: -payoff,
+    netIncome: -payoff,
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: 0,
+    activeEntityCount: 1,
+    entityBreakdown: [],
+  };
+  const nextGlobalLedger = [...(state.globalLedger ?? []), entry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      loans: nextLoans,
+      metrics: nextMetrics,
+      globalLedger: nextGlobalLedger,
+      lastEventBanner: `🏦 Đã tất toán sớm khoản vay (-${formatVnd(payoff, true)})${target.collateralTile ? ` · Giải chấp ô đất (${target.collateralTile.x + 1}, ${target.collateralTile.z + 1})` : ''}.`,
+    },
+    success: true,
+    message: `Tất toán sớm thành công (-${formatVnd(payoff, true)})`,
+  };
+}
+
+export function createBankDeposit(
+  state: CityGameState,
+  amount: number,
+  months: 3 | 6,
+  bypassLevelLock = false
+): BankOperationResult {
+  if (!bypassLevelLock && (state.cityLevel ?? 1) < 2) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Ngân hàng Đô thị mở khóa từ City Level 2 (150 dân).',
+    };
+  }
+  if ((state.loans ?? []).length > 0) {
+    return {
+      nextState: {
+        ...state,
+        lastEventBanner:
+          '🔒 Không thể mở sổ tiết kiệm mới khi thành phố đang còn khoản vay chưa tất toán (chống chênh lệch lãi suất)!',
+      },
+      success: false,
+      message: 'Không thể gửi tiết kiệm khi đang có khoản vay chưa trả.',
+    };
+  }
+  if (amount <= 0 || state.treasury < amount) {
+    return {
+      nextState: {
+        ...state,
+        lastEventBanner: `Ngân sách không đủ! Cần ${formatVnd(amount, true)} để gửi tiết kiệm nhưng hiện chỉ có ${formatVnd(state.treasury, true)}.`,
+      },
+      success: false,
+      message: 'Ngân sách không đủ để gửi tiết kiệm.',
+    };
+  }
+
+  const ratePercent = months === 6 ? 1.5 : 1.0;
+  const newDeposit: BankDeposit = {
+    id: `DEP-Y${state.year}-M${state.month}-D${state.day}-${((state.deposits?.length ?? 0) + 1)}-${Date.now().toString(36).slice(-3)}`,
+    amount,
+    monthlyRatePercent: ratePercent,
+    totalMonths: months,
+    remainingMonths: months,
+    accruedInterest: 0,
+  };
+
+  const nextTreasury = Number((state.treasury - amount).toFixed(4));
+  const nextDeposits = [...(state.deposits ?? []), newDeposit];
+  const nextMetrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+
+  const entry: LedgerEntry = {
+    id: `BANK-DEP-${newDeposit.id}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Ngân hàng Đô thị: Mở sổ tiết kiệm ${formatVnd(amount, true)} (${months} tháng · +${ratePercent}%/tháng)`,
+    totalRevenue: 0,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: amount,
+    buildingMaintenanceCost: 0,
+    infraMaintenanceCost: 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: -amount,
+    netIncome: -amount,
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: 0,
+    activeEntityCount: 1,
+    entityBreakdown: [],
+  };
+  const nextGlobalLedger = [...(state.globalLedger ?? []), entry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      deposits: nextDeposits,
+      metrics: nextMetrics,
+      globalLedger: nextGlobalLedger,
+      lastEventBanner: `🏦 Đã gửi tiết kiệm ${formatVnd(amount, true)} kỳ hạn ${months} tháng (lãi suất +${ratePercent}%/tháng).`,
+    },
+    success: true,
+    message: `Đã gửi tiết kiệm ${formatVnd(amount, true)}`,
+  };
+}
+
+export function withdrawDepositEarly(
+  state: CityGameState,
+  depositId: string
+): BankOperationResult {
+  const existingDeposits = state.deposits ?? [];
+  const target = existingDeposits.find((d) => d.id === depositId);
+  if (!target) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Không tìm thấy sổ tiết kiệm cần rút.',
+    };
+  }
+
+  const elapsedMonths = Math.max(0, target.totalMonths - target.remainingMonths);
+  const earlyInterest = Number((target.amount * 0.001 * elapsedMonths).toFixed(4));
+  const totalPayout = Number((target.amount + earlyInterest).toFixed(4));
+
+  const nextTreasury = Number((state.treasury + totalPayout).toFixed(4));
+  const nextDeposits = existingDeposits.filter((d) => d.id !== depositId);
+  const nextMetrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+
+  const entry: LedgerEntry = {
+    id: `BANK-WDR-${depositId}-${state.day}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Ngân hàng Đô thị: Rút tiết kiệm trước hạn (+${formatVnd(totalPayout, true)} · lãi không kỳ hạn 0,1%/th)`,
+    totalRevenue: totalPayout,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: 0,
+    buildingMaintenanceCost: 0,
+    infraMaintenanceCost: 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: totalPayout,
+    netIncome: totalPayout,
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: 0,
+    activeEntityCount: 1,
+    entityBreakdown: [],
+  };
+  const nextGlobalLedger = [...(state.globalLedger ?? []), entry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      deposits: nextDeposits,
+      metrics: nextMetrics,
+      globalLedger: nextGlobalLedger,
+      lastEventBanner: `🏦 Đã rút sổ tiết kiệm trước hạn: nhận về +${formatVnd(totalPayout, true)} (gốc ${formatVnd(target.amount, true)} + lãi không kỳ hạn ${formatVnd(earlyInterest, true)}).`,
+    },
+    success: true,
+    message: `Rút tiết kiệm thành công (+${formatVnd(totalPayout, true)})`,
   };
 }

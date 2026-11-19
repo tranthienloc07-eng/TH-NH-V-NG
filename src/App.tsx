@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   CityViewport3D,
   GraphicQuality,
+  HeatmapMode,
   HoverTileInfo,
 } from './components/CityViewport3D';
+import { BankModal } from './components/BankModal';
 import { GameModals } from './components/GameModals';
 import { MacroPolicyDrawer } from './components/MacroPolicyDrawer';
 import {
@@ -22,6 +24,7 @@ import {
   CITY_LEVEL_SPECS,
   clearSavedGameState,
   continueEndlessAfterVictory,
+  createBankDeposit,
   createInitialGameState,
   evaluateOnboardingProgress,
   evaluatePlacementRisk,
@@ -30,22 +33,27 @@ import {
   getBuildingFinancialPreview,
   getPolicyUnlockRequirementLabel,
   getRegionName,
-   getToolUnlockRequirementLabel,
+  getToolUnlockRequirementLabel,
   hasPlayerActuallyPlayed,
   isBuiltStructure,
   isPolicyUnlockedAtLevel,
   isToolUnlockedAtLevel,
   loadGameStateFromLocalStorage,
   markSettlementReportRead,
+  mortgageReservedLand,
   ONBOARDING_QUESTS,
   renameBuildingCustomName,
+  repayBankLoanEarly,
   saveGameStateToLocalStorage,
   selectOrUnlockRegion,
   setDayTickInterval,
   stepSimulationDay,
   stepSimulationMonth,
+  takeBankLoan,
   TOOLS,
   triggerShowbizConcert,
+  unreservePublicLand,
+  withdrawDepositEarly,
 } from './game/rules';
 import {
   AdvisorRecommendation,
@@ -251,8 +259,21 @@ function renderMinimalistDockIcon(iconId: string): React.ReactNode {
           <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
         </svg>
       );
+    case 'act_reserve_land':
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="2" strokeDasharray="3 2" />
+          <path d="M12 8v8M8 12h8" />
+        </svg>
+      );
 
     // Utility & Policy icons
+    case 'util_bank':
+      return (
+        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 10h18M5 10v8M9 10v8M15 10v8M19 10v8M2 18h20M12 3l9 5H3l9-5z" />
+        </svg>
+      );
     case 'util_economy':
       return (
         <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -360,6 +381,8 @@ export default function App() {
   const [howToPlayOpen, setHowToPlayOpen] = useState(false);
   const [regionMapOpen, setRegionMapOpen] = useState(false);
   const [settlementModalOpen, setSettlementModalOpen] = useState(false);
+  const [bankModalOpen, setBankModalOpen] = useState(false);
+  const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('none');
   const [advisorHudOpen, setAdvisorHudOpen] = useState(false);
   const [lastAutoAdvisorReportId, setLastAutoAdvisorReportId] = useState<
     string | null
@@ -535,6 +558,8 @@ export default function App() {
     setPendingPlacementRisk(null);
     setRegionMapOpen(false);
     setSettlementModalOpen(false);
+    setBankModalOpen(false);
+    setHeatmapMode('none');
     setAdvisorHudOpen(false);
     setLastAutoAdvisorReportId(null);
     setBudgetToast(null);
@@ -550,6 +575,8 @@ export default function App() {
     setPendingPlacementRisk(null);
     setRegionMapOpen(false);
     setSettlementModalOpen(false);
+    setBankModalOpen(false);
+    setHeatmapMode('none');
     setAdvisorHudOpen(false);
     setLastAutoAdvisorReportId(null);
     setBudgetToast(null);
@@ -657,7 +684,7 @@ export default function App() {
       if (
         gameState.selectedTool === 'inspect' &&
         clickedTile &&
-        isBuiltStructure(clickedTile.type)
+        (isBuiltStructure(clickedTile.type) || clickedTile.isReservedPublicLand)
       ) {
         soundEngine.playClick();
         setHoverInfo(null);
@@ -678,6 +705,7 @@ export default function App() {
       if (
         gameState.selectedTool !== 'inspect' &&
         gameState.selectedTool !== 'act_clearance' &&
+        gameState.selectedTool !== 'act_reserve_land' &&
         gameState.selectedTool !== 'sub_drainage' &&
         gameState.treasury >= 0
       ) {
@@ -866,6 +894,90 @@ export default function App() {
     });
   }, []);
 
+  const handleTakeLoan = useCallback(
+    (principal: number, termMonths: 6 | 12) => {
+      setGameState((prev) => {
+        const res = takeBankLoan(prev, principal, termMonths);
+        if (res.success) {
+          soundEngine.playBuild();
+          const savedAt = saveGameStateToLocalStorage(res.nextState);
+          return savedAt ? { ...res.nextState, lastSavedAt: savedAt } : res.nextState;
+        }
+        soundEngine.playError();
+        return res.nextState;
+      });
+    },
+    []
+  );
+
+  const handleRepayLoanEarly = useCallback((loanId: string) => {
+    setGameState((prev) => {
+      const res = repayBankLoanEarly(prev, loanId);
+      if (res.success) {
+        soundEngine.playClick();
+        const savedAt = saveGameStateToLocalStorage(res.nextState);
+        return savedAt ? { ...res.nextState, lastSavedAt: savedAt } : res.nextState;
+      }
+      soundEngine.playError();
+      return res.nextState;
+    });
+  }, []);
+
+  const handleCreateDeposit = useCallback(
+    (principal: number, termMonths: 3 | 6) => {
+      setGameState((prev) => {
+        const res = createBankDeposit(prev, principal, termMonths);
+        if (res.success) {
+          soundEngine.playBuild();
+          const savedAt = saveGameStateToLocalStorage(res.nextState);
+          return savedAt ? { ...res.nextState, lastSavedAt: savedAt } : res.nextState;
+        }
+        soundEngine.playError();
+        return res.nextState;
+      });
+    },
+    []
+  );
+
+  const handleWithdrawDepositEarly = useCallback((depositId: string) => {
+    setGameState((prev) => {
+      const res = withdrawDepositEarly(prev, depositId);
+      if (res.success) {
+        soundEngine.playClick();
+        const savedAt = saveGameStateToLocalStorage(res.nextState);
+        return savedAt ? { ...res.nextState, lastSavedAt: savedAt } : res.nextState;
+      }
+      soundEngine.playError();
+      return res.nextState;
+    });
+  }, []);
+
+  const handleUnreservePublicLand = useCallback((x: number, z: number) => {
+    setGameState((prev) => {
+      const res = unreservePublicLand(prev, x, z);
+      if (res.success) {
+        soundEngine.playClearance();
+        const savedAt = saveGameStateToLocalStorage(res.nextState);
+        return savedAt ? { ...res.nextState, lastSavedAt: savedAt } : res.nextState;
+      }
+      soundEngine.playError();
+      return res.nextState;
+    });
+  }, []);
+
+  const handleMortgageReservedLand = useCallback((x: number, z: number) => {
+    setGameState((prev) => {
+      const res = mortgageReservedLand(prev, x, z);
+      if (res.success) {
+        soundEngine.playBuild();
+        const savedAt = saveGameStateToLocalStorage(res.nextState);
+        return savedAt ? { ...res.nextState, lastSavedAt: savedAt } : res.nextState;
+      }
+      soundEngine.playError();
+      return res.nextState;
+    });
+  }, []);
+
   // Chặn lan truyền sự kiện chuột trên thanh HUD để không bị truyền ngược xuống lớp Three.js canvas phía sau
   const stopHudPropagation = useCallback((e: React.SyntheticEvent) => {
     e.stopPropagation();
@@ -887,6 +999,8 @@ export default function App() {
         e.preventDefault();
         if (pendingPlacementRisk) {
           setPendingPlacementRisk(null);
+        } else if (bankModalOpen) {
+          setBankModalOpen(false);
         } else if (settlementModalOpen) {
           handleCloseSettlementModal();
         } else if (howToPlayOpen) {
@@ -1023,6 +1137,14 @@ export default function App() {
       } else if (e.code === 'KeyJ') {
         e.preventDefault();
         handleTriggerConcert();
+      } else if (e.code === 'KeyL') {
+        e.preventDefault();
+        soundEngine.playClick();
+        setHeatmapMode((prev) => (prev === 'land_value' ? 'none' : 'land_value'));
+      } else if (e.code === 'KeyK') {
+        e.preventDefault();
+        soundEngine.playClick();
+        setBankModalOpen((v) => !v);
       } else if (
         /^Digit[0-9]$/.test(e.code) ||
         /^Numpad[0-9]$/.test(e.code)
@@ -1057,6 +1179,7 @@ export default function App() {
     gameState.cityLevel,
     dockCategory,
     pendingPlacementRisk,
+    bankModalOpen,
     settlementModalOpen,
     howToPlayOpen,
     regionMapOpen,
@@ -1161,8 +1284,8 @@ export default function App() {
     {
       id: 'special',
       iconId: 'cat_special',
-      title: 'Giải Tỏa & Cống Ngầm',
-      shortcut: 'F4 · 1-2',
+      title: 'Giải Tỏa, Cống & Quỹ Đất',
+      shortcut: 'F4 · 1-3',
       tabKey: 'F4',
     },
   ];
@@ -1173,6 +1296,7 @@ export default function App() {
       <CityViewport3D
         gameState={gameState}
         graphicQuality={graphicQuality}
+        heatmapMode={heatmapMode}
         onDetectSoftwareGl={handleDetectSoftwareGl}
         onTileClick={handleTileClick}
         onTileRightClick={handleTileRightClick}
@@ -1199,6 +1323,8 @@ export default function App() {
           onUpdatePolicy={handleUpdatePolicy}
           onApplyToolOnTile={executeToolOnTile}
           onRenameBuilding={handleRenameBuilding}
+          onUnreservePublicLand={handleUnreservePublicLand}
+          onMortgageReservedLand={handleMortgageReservedLand}
           onReleaseToPan={handleReleaseToolToFreePan}
           onClose={() => setContextMenu(null)}
         />
@@ -1467,7 +1593,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Top-Right Cluster (.top-bar .hud-container): Gọn gàng, flex-wrap chống tràn tuyệt đối ở 1280px */}
+            {/* Top-Right Cluster (.top-bar .hud-container): Gọn gàng 1 hàng ở 1280px, tự flex-wrap nếu hẹp hơn */}
             <div
               onMouseMove={stopHudPropagation}
               onMouseOver={stopHudPropagation}
@@ -1505,7 +1631,7 @@ export default function App() {
                   soundEngine.playClick();
                   setRegionMapOpen(true);
                 }}
-                className={`px-2 py-1 rounded-md font-bold text-xs whitespace-nowrap shrink-0 border ${
+                className={`px-1.5 py-0.5 rounded-md font-bold text-[11px] whitespace-nowrap shrink-0 border ${
                   !region9x9Unlocked
                     ? 'bg-slate-900/80 text-slate-400 border-slate-700 cursor-not-allowed'
                     : gameState.metrics.canExpandRegion
@@ -1514,6 +1640,28 @@ export default function App() {
                 }`}
               >
                 🗺 9×9 ({gameState.unlockedRegions.length}/81)
+              </button>
+
+              <button
+                type="button"
+                tabIndex={-1}
+                data-testid="heatmap-land-value-btn"
+                title="Bật/Tắt Bản đồ nhiệt Giá đất [L]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.currentTarget.blur();
+                  soundEngine.playClick();
+                  setHeatmapMode((prev) =>
+                    prev === 'land_value' ? 'none' : 'land_value'
+                  );
+                }}
+                className={`px-1.5 py-0.5 rounded-md font-bold text-[11px] whitespace-nowrap shrink-0 border cursor-pointer transition-colors ${
+                  heatmapMode === 'land_value'
+                    ? 'bg-orange-400 text-slate-950 border-white shadow-md'
+                    : 'bg-[#152536] text-orange-200 border-orange-400/45 hover:bg-[#1c3148]'
+                }`}
+              >
+                🗺 Giá đất [L]
               </button>
 
               {/* Nút xoay vòng nhịp độ thời gian: 6s → 5s → 8s → 6s */}
@@ -1529,7 +1677,7 @@ export default function App() {
                   const nextMs = cur === 6000 ? 5000 : cur === 5000 ? 8000 : 6000;
                   handleChangeDayTickInterval(nextMs);
                 }}
-                className="px-2 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-amber-400/50 text-xs font-mono font-bold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
+                className="px-1.5 py-0.5 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-amber-400/50 text-[11px] font-mono font-bold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 ⏱ {Math.round((gameState.dayTickIntervalMs || 6000) / 1000)}s/N
               </button>
@@ -1546,7 +1694,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleOpenSettlementModal();
                 }}
-                className={`relative px-2 py-1 rounded-md border font-bold text-xs cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 transition-all ${
+                className={`relative px-1.5 py-0.5 rounded-md border font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 transition-all ${
                   gameState.hasUnreadSettlement
                     ? 'bg-amber-500/30 hover:bg-amber-500/40 text-amber-100 border-amber-400 shadow-lg ring-1 ring-rose-400/80'
                     : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border-amber-400/50'
@@ -1577,7 +1725,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleToggleAdvisorHud();
                 }}
-                className={`relative px-2 py-1 rounded-md border font-bold text-xs cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 transition-all ${
+                className={`relative px-1.5 py-0.5 rounded-md border font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 transition-all ${
                   advisorHudOpen
                     ? 'bg-emerald-400 text-slate-950 border-white shadow-md'
                     : gameState.hasUnreadSettlement
@@ -1606,7 +1754,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleToggleGraphicQuality();
                 }}
-                className={`px-2 py-1 rounded-md border font-bold text-xs cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+                className={`px-1.5 py-0.5 rounded-md border font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
                   graphicQuality === 'high'
                     ? 'bg-indigo-500/25 hover:bg-indigo-500/35 text-indigo-200 border-indigo-400/60'
                     : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-600'
@@ -1627,7 +1775,7 @@ export default function App() {
                   soundEngine.playClick();
                   setHowToPlayOpen(true);
                 }}
-                className="px-2 py-1 rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-400/50 font-extrabold text-xs cursor-pointer whitespace-nowrap shrink-0"
+                className="px-1.5 py-0.5 rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-400/50 font-extrabold text-[11px] cursor-pointer whitespace-nowrap shrink-0"
               >
                 ?
               </button>
@@ -1641,7 +1789,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleAdvanceDayManual();
                 }}
-                className="px-2 py-1 rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs cursor-pointer whitespace-nowrap shrink-0"
+                className="px-1.5 py-0.5 rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0"
               >
                 +1 Ngày
               </button>
@@ -1655,7 +1803,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleAdvanceMonthManual();
                 }}
-                className="px-2 py-1 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs cursor-pointer whitespace-nowrap shrink-0"
+                className="px-1.5 py-0.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0"
               >
                 +1 Tháng
               </button>
@@ -1670,7 +1818,7 @@ export default function App() {
                   e.currentTarget.blur();
                   setCameraPresetTrigger((c) => c + 1);
                 }}
-                className="px-2 py-1 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs cursor-pointer whitespace-nowrap"
+                className="px-1.5 py-0.5 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer whitespace-nowrap"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
                   <path d="M12 5V2L8 6l4 4V7c3.31 0 6 2.69 6 6 0 2.97-2.17 5.43-5 5.91v2.02c3.95-.49 7-3.85 7-7.93 0-4.42-3.58-8-8-8zm-6 8c0-1.65.67-3.15 1.76-4.24L6.34 7.34C4.9 8.79 4 10.79 4 13c0 4.08 3.05 7.44 7 7.93v-2.02c-2.83-.48-5-2.94-5-5.91z" />
@@ -1688,7 +1836,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleToggleMute();
                 }}
-                className="px-2 py-1 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs cursor-pointer whitespace-nowrap"
+                className="px-1.5 py-0.5 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer whitespace-nowrap"
               >
                 {isMuted ? (
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current text-rose-400">
@@ -1712,7 +1860,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleTogglePause();
                 }}
-                className="px-2 py-1 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs cursor-pointer whitespace-nowrap"
+                className="px-1.5 py-0.5 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer whitespace-nowrap"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
                   <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
@@ -2041,12 +2189,13 @@ export default function App() {
             />
           </div>
 
-          {/* Xếp tầng Flex dọc (flex-col) cho Hộp 5 chỉ số tài chính và Thanh tên/trạng thái công trình ngay phía trên Bottom Icon Dock:
-              - Chung 1 container flex-col items-center gap-1.5 nên TIDAK BAO GIỜ đè lên nhau
+          {/* Xếp tầng Flex dọc (flex-col) chung cho Chú thích Heatmap [L], Hộp 5 chỉ số tài chính và Thanh tên công trình ngay phía trên Bottom Icon Dock:
+              - Chung 1 container flex-col items-center gap-1.5 nên KHÔNG BAO GIỜ đè lên nhau
               - Tự động thu gọn & dịch vùng an toàn sang trái khi bảng Cố vấn (AdvisorHud) đang mở ở cạnh phải trên màn hình 1280x720 */}
-          {!dockCollapsed &&
-            !activePolicyDrawer &&
-            (hoveredDockTooltip || selectedToolFinancialPreview) && (
+          {!activePolicyDrawer &&
+            (heatmapMode === 'land_value' ||
+              (!dockCollapsed &&
+                (hoveredDockTooltip || selectedToolFinancialPreview))) && (
               <div
                 data-testid="bottom-hud-tooltip-stack"
                 className={`fixed bottom-[62px] z-[1045] pointer-events-none flex flex-col items-center gap-1.5 px-2 transition-all ${
@@ -2055,9 +2204,52 @@ export default function App() {
                     : 'left-1/2 -translate-x-1/2 w-full max-w-[min(760px,92vw)]'
                 }`}
               >
-                {/* Tầng trên: Hộp 5 chỉ số tài chính (1. Vốn | 2. Upkeep | 3. Nhân sự | 4. Kỳ vọng | 5. Hoàn vốn) */}
-                {(hoveredDockTooltip?.financialPreview ??
-                  selectedToolFinancialPreview) && (
+                {/* Thanh Chú Thích Bản Đồ Nhiệt Giá Đất (xếp gọn trên cùng trong flex-col, không bao giờ đè lên hộp 5 chỉ số) */}
+                {heatmapMode === 'land_value' && (
+                  <div
+                    data-testid="land-value-heatmap-legend"
+                    onMouseMove={stopHudPropagation}
+                    onMouseOver={stopHudPropagation}
+                    onClick={stopHudPropagation}
+                    className="hud-container pointer-events-auto w-fit max-w-full rounded-lg border border-orange-400/60 bg-[#0b1520]/95 px-2.5 py-1 shadow-2xl flex flex-wrap items-center justify-center gap-2 text-[10px] text-slate-100"
+                  >
+                    <span className="font-extrabold text-orange-300 whitespace-nowrap">
+                      🗺 Giá đất [L]:
+                    </span>
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-slate-500 border border-slate-300/50" />
+                      &lt;1 Tỷ (Xám)
+                    </span>
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 border border-emerald-200/60" />
+                      1–5 Tỷ (Xanh)
+                    </span>
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-amber-400 border border-amber-100/60" />
+                      5–15 Tỷ (Vàng)
+                    </span>
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-orange-600 border border-orange-200/60" />
+                      &gt;15 Tỷ (Đỏ cam)
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Tắt bản đồ nhiệt giá đất"
+                      onClick={() => {
+                        soundEngine.playClick();
+                        setHeatmapMode('none');
+                      }}
+                      className="ml-0.5 px-1 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* Tầng giữa: Hộp 5 chỉ số tài chính (1. Vốn | 2. Upkeep | 3. Nhân sự | 4. Kỳ vọng | 5. Hoàn vốn) */}
+                {!dockCollapsed &&
+                  (hoveredDockTooltip?.financialPreview ??
+                    selectedToolFinancialPreview) && (
                   <div
                     data-testid="build-financial-preview-bar"
                     className="w-fit max-w-full rounded-xl border border-amber-400/60 bg-[#09131e]/96 px-3 py-1.5 shadow-2xl flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] font-mono"
@@ -2253,6 +2445,8 @@ export default function App() {
                       ? activeClearanceInfo?.canClear
                         ? formatVnd(activeClearanceInfo.compensationCost)
                         : '500k - Theo giá đất'
+                      : tool.id === 'act_reserve_land'
+                      ? '100% giá đất hiện tại'
                       : tool.cost > 0
                       ? formatVnd(tool.cost)
                       : 'Miễn phí';
@@ -2399,6 +2593,47 @@ export default function App() {
 
                 <button
                   type="button"
+                  data-testid="dock-bank-btn"
+                  aria-label="Ngân Hàng Đô Thị [K]"
+                  title="Ngân Hàng Đô Thị — Vay vốn & Gửi tiết kiệm [K]"
+                  onMouseEnter={() =>
+                    setHoveredDockTooltip({
+                      title: 'Ngân Hàng Đô Thị',
+                      shortcut: 'K',
+                      meta: isPolicyUnlockedAtLevel('bank', gameState.cityLevel)
+                        ? `${(gameState.loans ?? []).length} khoản vay · ${(gameState.deposits ?? []).length} sổ TK`
+                        : '🔒 Mở khóa ở Level 2 (150 dân)',
+                    })
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    soundEngine.playClick();
+                    setBankModalOpen((v) => !v);
+                  }}
+                  className={`dock-icon-btn relative border cursor-pointer ${
+                    bankModalOpen
+                      ? 'bg-sky-400 text-slate-950 border-white shadow-md'
+                      : 'bg-[#152536] text-sky-300 border-sky-500/40 hover:bg-[#1c3147]'
+                  }`}
+                >
+                  {renderMinimalistDockIcon('util_bank')}
+                  {!isPolicyUnlockedAtLevel('bank', gameState.cityLevel) && (
+                    <span className="absolute -top-1 -right-1 rounded-full bg-slate-950 border border-amber-400/70 px-1 text-[8px] font-mono font-bold text-amber-300 leading-tight">
+                      🔒
+                    </span>
+                  )}
+                  {isPolicyUnlockedAtLevel('bank', gameState.cityLevel) &&
+                    ((gameState.loans ?? []).length > 0 ||
+                      (gameState.deposits ?? []).length > 0) && (
+                      <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 rounded-full bg-sky-500 border border-white text-[8px] font-extrabold text-slate-950 flex items-center justify-center">
+                        {(gameState.loans ?? []).length +
+                          (gameState.deposits ?? []).length}
+                      </span>
+                    )}
+                </button>
+
+                <button
+                  type="button"
                   data-testid="open-settlement-dock-btn"
                   aria-label="Báo Cáo Quyết Toán & Sổ Cái [B]"
                   onMouseEnter={() =>
@@ -2515,11 +2750,22 @@ export default function App() {
         </div>
       )}
 
-      {/* Bảng Báo Cáo Quyết Toán Tài Chính Cuối Tháng (Chỉ mở khi người chơi bấm vào Biểu tượng Thông báo Báo Cáo (!) hoặc phím [L]) */}
+      {/* Bảng Báo Cáo Quyết Toán Tài Chính Cuối Tháng (Chỉ mở khi người chơi bấm vào Biểu tượng Thông báo Báo Cáo (!) hoặc phím [B]) */}
       <MonthlySettlementModal
         open={settlementModalOpen}
         gameState={gameState}
         onClose={handleCloseSettlementModal}
+      />
+
+      {/* Ngân Hàng Đô Thị: Vay Vốn Đầu Tư & Gửi Tiết Kiệm [K] */}
+      <BankModal
+        open={bankModalOpen}
+        gameState={gameState}
+        onTakeLoan={handleTakeLoan}
+        onRepayLoanEarly={handleRepayLoanEarly}
+        onCreateDeposit={handleCreateDeposit}
+        onWithdrawDepositEarly={handleWithdrawDepositEarly}
+        onClose={() => setBankModalOpen(false)}
       />
 
       {/* How to Play & Auto-Save Settings Modal */}

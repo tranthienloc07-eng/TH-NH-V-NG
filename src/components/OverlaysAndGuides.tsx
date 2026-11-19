@@ -9,6 +9,7 @@ import {
   getRegionName,
   getTileDetailedReport,
   isBuiltStructure,
+  isPolicyUnlockedAtLevel,
   isResidentialTile,
   isRoadTile,
   isWorkplaceTile,
@@ -137,6 +138,12 @@ export const BuildingHoverTooltip: React.FC<{
         </div>
       )}
 
+      {tile.isReservedPublicLand && (
+        <div className="text-[10px] font-bold text-cyan-300 whitespace-nowrap">
+          Đã khoanh quỹ đất công · Đất: {formatVnd(tile.landValue, true)}
+        </div>
+      )}
+
       {built && (
         <div className="text-[10px] text-slate-300 whitespace-nowrap">
           Chuột phải / Chạm: Xem thuế &amp; nhân sự
@@ -160,6 +167,8 @@ interface BuildingContextMenuProps {
     value: MacroPolicies[K]
   ) => void;
   onApplyToolOnTile: (x: number, z: number, tool: ToolId) => void;
+  onUnreservePublicLand?: (x: number, z: number) => void;
+  onMortgageReservedLand?: (x: number, z: number) => void;
   onRenameBuilding?: (x: number, z: number, newName: string) => void;
   onReleaseToPan?: () => void;
   onClose: () => void;
@@ -170,6 +179,8 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
   gameState,
   onUpdatePolicy,
   onApplyToolOnTile,
+  onUnreservePublicLand,
+  onMortgageReservedLand,
   onRenameBuilding,
   onReleaseToPan,
   onClose,
@@ -180,6 +191,16 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
   if (!contextMenu) return null;
   const tile = gameState.grid[contextMenu.z]?.[contextMenu.x];
   if (!tile) return null;
+
+  const citUnlocked = isPolicyUnlockedAtLevel('cit', gameState.cityLevel ?? 1);
+  const isPrivateEduMed =
+    tile.type === 'priv_hospital' || tile.type === 'priv_school';
+  const isAlreadyMortgaged = (gameState.loans ?? []).some(
+    (loan) =>
+      loan.collateralTile &&
+      loan.collateralTile.x === tile.x &&
+      loan.collateralTile.z === tile.z
+  );
 
   const report = getTileDetailedReport(
     gameState.grid,
@@ -505,6 +526,63 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
                     {report.publicServiceDetailLabel}
                   </div>
                 )}
+
+                {tile.type === 'pub_admin' &&
+                  !report.isUnderConstruction &&
+                  gameState.metrics.hasActivePublicAdmin && (
+                    <div
+                      data-testid="pub-admin-city-labor-card"
+                      className="rounded bg-slate-900/90 border border-emerald-500/40 px-2 py-1.5 space-y-1 text-[10px]"
+                    >
+                      <div className="font-bold text-emerald-300">
+                        Thống kê Nhân lực Toàn Thành Phố
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-[9px] font-mono">
+                        <div className="rounded bg-[#0d1824] p-1 border border-slate-800">
+                          <div className="text-slate-400 font-sans">Phổ thông</div>
+                          <div className="text-emerald-300 font-bold">
+                            {gameState.metrics.labor.employedUnskilled} có việc
+                          </div>
+                          <div className="text-amber-300">
+                            {Math.max(
+                              0,
+                              gameState.metrics.labor.unskilled -
+                                gameState.metrics.labor.employedUnskilled
+                            )}{' '}
+                            thất nghiệp
+                          </div>
+                        </div>
+                        <div className="rounded bg-[#0d1824] p-1 border border-slate-800">
+                          <div className="text-slate-400 font-sans">Trung cấp</div>
+                          <div className="text-sky-300 font-bold">
+                            {gameState.metrics.labor.employedSkilled} có việc
+                          </div>
+                          <div className="text-amber-300">
+                            {Math.max(
+                              0,
+                              gameState.metrics.labor.skilled -
+                                gameState.metrics.labor.employedSkilled
+                            )}{' '}
+                            thất nghiệp
+                          </div>
+                        </div>
+                        <div className="rounded bg-[#0d1824] p-1 border border-slate-800">
+                          <div className="text-slate-400 font-sans">Bằng cấp</div>
+                          <div className="text-cyan-300 font-bold">
+                            {gameState.metrics.labor.employedEducated} có việc
+                          </div>
+                          <div className="text-amber-300">
+                            {Math.max(
+                              0,
+                              gameState.metrics.labor.educated -
+                                gameState.metrics.labor.employedEducated
+                            )}{' '}
+                            thất nghiệp
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
               </div>
 
               <div className="rounded bg-[#0d1824] px-2 py-1 border border-slate-800 flex items-center justify-between text-[10px]">
@@ -528,7 +606,9 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
 
                 <div className="flex items-center justify-between text-[10px]">
                   <span className="text-slate-300">
-                    CIT thực thu ({report.corporateTaxRate}%):
+                    {isPrivateEduMed
+                      ? `CIT thực thu (${report.corporateTaxRate}% · Ưu đãi XHH):`
+                      : `CIT thực thu (${report.corporateTaxRate}%):`}
                   </span>
                   <span
                     data-testid="cit-current-revenue"
@@ -578,26 +658,48 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
               </div>
 
               {report.corporateTaxKey ? (
-                <div className="rounded bg-[#0d1824] px-2 py-1 border border-slate-800">
-                  <label className="flex justify-between text-[10px] text-amber-200 font-semibold">
+                <div className="rounded bg-[#0d1824] px-2 py-1 border border-slate-800 space-y-0.5">
+                  <label className="flex justify-between gap-1 text-[10px] text-amber-200 font-semibold">
                     <span className="truncate">{report.corporateTaxLabel}</span>
-                    <span className="font-mono tabular-nums">
-                      {report.corporateTaxRate}%
+                    <span className="font-mono tabular-nums shrink-0">
+                      {isPrivateEduMed
+                        ? `${report.corporateTaxRate}% (TM ${gameState.policies.citMarket}%)`
+                        : `${report.corporateTaxRate}%`}
                     </span>
                   </label>
                   <input
+                    data-testid="context-cit-slider"
                     type="range"
                     min={5}
                     max={30}
-                    value={report.corporateTaxRate}
+                    disabled={!citUnlocked}
+                    value={Number(gameState.policies[report.corporateTaxKey] ?? report.corporateTaxRate)}
                     onChange={(e) =>
+                      citUnlocked &&
                       onUpdatePolicy(
                         report.corporateTaxKey!,
                         Number(e.target.value) as never
                       )
                     }
-                    className="w-full h-1.5 accent-amber-400 cursor-pointer"
+                    className={`w-full h-1.5 accent-amber-400 ${
+                      citUnlocked
+                        ? 'cursor-pointer'
+                        : 'cursor-not-allowed opacity-50'
+                    }`}
                   />
+                  {!citUnlocked && (
+                    <div
+                      data-testid="context-cit-lock-note"
+                      className="text-[10px] font-semibold text-amber-300"
+                    >
+                      🔒 Mở khóa chỉnh thuế CIT ở Level 4 (900 dân)
+                    </div>
+                  )}
+                  {isPrivateEduMed && (
+                    <div className="text-[9px] text-emerald-300">
+                      Chính sách ưu đãi XHH: Áp 50% thuế Thương mại, trần tối đa 10% (không bị áp 30%).
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="rounded bg-[#0d1824] px-2 py-1 border border-slate-800 text-[10px] text-slate-400">
@@ -613,12 +715,27 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
           <div className="space-y-1">
             <div className="flex items-center justify-between border-b border-slate-700/80 pb-1">
               <span className="font-extrabold text-amber-300 uppercase tracking-wide text-[10px]">
-                3. Giải Tỏa &amp; Hạ Tầng Ngầm
+                3. Giải Tỏa &amp; Quỹ Đất
               </span>
-              <span className="font-mono text-[10px] font-bold text-amber-200">
+              <span
+                data-testid="context-land-value"
+                className="font-mono text-[10px] font-bold text-amber-200"
+              >
                 Đất: {formatVnd(tile.landValue, true)}
               </span>
             </div>
+
+            {tile.isReservedPublicLand && (
+              <div
+                data-testid="context-reserved-land-badge"
+                className="rounded bg-cyan-950/80 border border-cyan-400/50 px-2 py-1 text-[10px] font-bold text-cyan-200 flex items-center justify-between"
+              >
+                <span>Đã khoanh quỹ đất công</span>
+                <span className="font-mono text-cyan-300">
+                  Cọc: {formatVnd(tile.reservedCostPaid ?? tile.landValue, true)}
+                </span>
+              </div>
+            )}
 
             <div className="flex items-center justify-between text-[10px]">
               <span className="text-slate-300">Hệ thống thoát nước:</span>
@@ -641,34 +758,79 @@ export const BuildingContextMenu: React.FC<BuildingContextMenuProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 pt-0.5">
-            {!tile.hasDrainage && tile.type !== 'river_water' && (
-              <button
-                type="button"
-                data-testid="context-drainage-btn"
-                onClick={() => {
-                  onApplyToolOnTile(tile.x, tile.z, 'sub_drainage');
-                  onClose();
-                }}
-                className="flex-1 py-1.5 px-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[10px] cursor-pointer whitespace-nowrap"
-              >
-                Lắp Cống (-15Tr)
-              </button>
+          <div className="space-y-1.5 pt-0.5">
+            {tile.isReservedPublicLand && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {onUnreservePublicLand && (
+                  <button
+                    type="button"
+                    data-testid="context-unreserve-land-btn"
+                    disabled={isAlreadyMortgaged}
+                    onClick={() => {
+                      onUnreservePublicLand(tile.x, tile.z);
+                      onClose();
+                    }}
+                    className={`flex-1 py-1.5 px-2 rounded-lg font-extrabold text-[10px] whitespace-nowrap ${
+                      isAlreadyMortgaged
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : 'bg-teal-500 hover:bg-teal-400 text-slate-950 cursor-pointer'
+                    }`}
+                  >
+                    Nhả đất &amp; Hoàn cọc (85%)
+                  </button>
+                )}
+                {onMortgageReservedLand && (
+                  <button
+                    type="button"
+                    data-testid="context-mortgage-land-btn"
+                    disabled={isAlreadyMortgaged}
+                    onClick={() => {
+                      onMortgageReservedLand(tile.x, tile.z);
+                      onClose();
+                    }}
+                    className={`flex-1 py-1.5 px-2 rounded-lg font-extrabold text-[10px] whitespace-nowrap ${
+                      isAlreadyMortgaged
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : 'bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer'
+                    }`}
+                  >
+                    {isAlreadyMortgaged
+                      ? 'Đang thế chấp NH'
+                      : 'Cầm cố đất vay 70% (0,6%/th)'}
+                  </button>
+                )}
+              </div>
             )}
 
-            {clearance.canClear && (
-              <button
-                type="button"
-                data-testid="context-clearance-btn"
-                onClick={() => {
-                  onApplyToolOnTile(tile.x, tile.z, 'act_clearance');
-                  onClose();
-                }}
-                className="flex-1 py-1.5 px-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-[10px] cursor-pointer whitespace-nowrap"
-              >
-                Đền Bù Giải Tỏa (-{formatVnd(clearance.compensationCost, true)})
-              </button>
-            )}
+            <div className="flex items-center gap-1.5">
+              {!tile.hasDrainage && tile.type !== 'river_water' && (
+                <button
+                  type="button"
+                  data-testid="context-drainage-btn"
+                  onClick={() => {
+                    onApplyToolOnTile(tile.x, tile.z, 'sub_drainage');
+                    onClose();
+                  }}
+                  className="flex-1 py-1.5 px-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-[10px] cursor-pointer whitespace-nowrap"
+                >
+                  Lắp Cống (-15Tr)
+                </button>
+              )}
+
+              {clearance.canClear && (
+                <button
+                  type="button"
+                  data-testid="context-clearance-btn"
+                  onClick={() => {
+                    onApplyToolOnTile(tile.x, tile.z, 'act_clearance');
+                    onClose();
+                  }}
+                  className="flex-1 py-1.5 px-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-[10px] cursor-pointer whitespace-nowrap"
+                >
+                  Đền Bù Giải Tỏa (-{formatVnd(clearance.compensationCost, true)})
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

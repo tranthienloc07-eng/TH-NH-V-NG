@@ -120,10 +120,14 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="pit-low-slider"
-                className="flex justify-between text-slate-300 mb-0.5"
+                className="flex justify-between gap-2 text-slate-300 mb-0.5"
               >
-                <span>Lao động phổ thông ({metrics.labor.unskilled} người)</span>
-                <span className="font-mono tabular-nums font-bold text-emerald-300">
+                <span>
+                  {metrics.hasActivePublicAdmin
+                    ? `Phổ thông: ${metrics.labor.unskilled} người (${metrics.labor.employedUnskilled} có việc · ${Math.max(0, metrics.labor.unskilled - metrics.labor.employedUnskilled)} chưa có việc)`
+                    : `Lao động phổ thông (${metrics.labor.unskilled} người)`}
+                </span>
+                <span className="font-mono tabular-nums font-bold text-emerald-300 shrink-0">
                   {policies.pitLow}%
                 </span>
               </label>
@@ -147,10 +151,14 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="pit-mid-slider"
-                className="flex justify-between text-slate-300 mb-0.5"
+                className="flex justify-between gap-2 text-slate-300 mb-0.5"
               >
-                <span>Lao động trung cấp ({metrics.labor.skilled} người)</span>
-                <span className="font-mono tabular-nums font-bold text-sky-300">
+                <span>
+                  {metrics.hasActivePublicAdmin
+                    ? `Trung cấp: ${metrics.labor.skilled} người (${metrics.labor.employedSkilled} có việc · ${Math.max(0, metrics.labor.skilled - metrics.labor.employedSkilled)} chưa có việc)`
+                    : `Lao động trung cấp (${metrics.labor.skilled} người)`}
+                </span>
+                <span className="font-mono tabular-nums font-bold text-sky-300 shrink-0">
                   {policies.pitMid}%
                 </span>
               </label>
@@ -174,11 +182,15 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
             <div>
               <label
                 htmlFor="pit-educated-slider"
-                className="flex justify-between text-slate-300 mb-0.5"
+                className="flex justify-between gap-2 text-slate-300 mb-0.5"
               >
-                <span>Lao động có bằng cấp ({metrics.labor.educated} người)</span>
+                <span>
+                  {metrics.hasActivePublicAdmin
+                    ? `Bằng cấp: ${metrics.labor.educated} người (${metrics.labor.employedEducated} có việc · ${Math.max(0, metrics.labor.educated - metrics.labor.employedEducated)} chưa có việc)`
+                    : `Lao động có bằng cấp (${metrics.labor.educated} người)`}
+                </span>
                 <span
-                  className={`font-mono tabular-nums font-bold ${
+                  className={`font-mono tabular-nums font-bold shrink-0 ${
                     policies.pitEducated > 25 ? 'text-rose-400' : 'text-amber-300'
                   }`}
                 >
@@ -200,6 +212,14 @@ export const MacroPolicyDrawer: React.FC<MacroPolicyDrawerProps> = ({
                   pitUnlocked ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
                 }`}
               />
+              {!metrics.hasActivePublicAdmin && (
+                <p
+                  data-testid="pit-admin-labor-hint"
+                  className="mt-1 text-[11px] text-slate-400 italic"
+                >
+                  Xây UBND (đủ nhân sự) để mở thống kê việc làm chi tiết
+                </p>
+              )}
               {metrics.labor.brainDrainActive && (
                 <p className="mt-1 text-[11px] font-semibold text-rose-400">
                   Cảnh báo: Thuế &gt; 25% đang gây Chảy máu chất xám (Brain Drain)!

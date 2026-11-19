@@ -15,12 +15,14 @@ import {
   hasNeighborOfType,
   isBuiltStructure,
   isMainArterialRoad,
+  isPublicServiceModule,
   isRoadTile,
   isToolUnlockedAtLevel,
   TILE_LABELS,
 } from './constants';
 import { calculateMacroEconomy, GlobalLedger } from './economy';
 import {
+  BankLoan,
   CityGameState,
   CompensationLevel,
   DifficultyLevel,
@@ -161,6 +163,94 @@ export function refreshAllRoadJunctions(grid: TileData[][]): void {
       } else {
         tile.junctionType = undefined;
       }
+    }
+  }
+}
+
+/**
+ * Khuếch tán Giá Đất Đô Thị (`recalculateGridLandValues`):
+ * Cập nhật `tile.landValue` dựa trên bán kính 3 ô xung quanh:
+ * - Tăng mạnh gần `road_urban`, `road_ring`, `pub_school`, `pub_hospital`, `com_mall`, `com_office`
+ * - Giảm mạnh khi gần `ind_factory` (ô nhiễm công nghiệp nặng)
+ */
+export function recalculateGridLandValues(grid: TileData[][]): void {
+  const rows = grid.length;
+  const cols = grid[0]?.length ?? 0;
+
+  const getNeighborLandImpact = (neighborType: TileType): number => {
+    switch (neighborType) {
+      case 'road_urban':
+        return 1.35;
+      case 'road_ring':
+        return 2.4;
+      case 'road_highway':
+        return 1.8;
+      case 'pub_school':
+        return 3.2;
+      case 'pub_hospital':
+        return 3.5;
+      case 'priv_school':
+        return 2.6;
+      case 'priv_hospital':
+        return 2.8;
+      case 'pub_admin':
+        return 2.5;
+      case 'com_mall':
+        return 4.6;
+      case 'com_office':
+        return 5.4;
+      case 'res_high':
+        return 1.8;
+      case 'showbiz_stadium':
+        return 3.4;
+      case 'ind_factory':
+        return -3.8;
+      default:
+        return 0;
+    }
+  };
+
+  for (let z = 0; z < rows; z++) {
+    for (let x = 0; x < cols; x++) {
+      const tile = grid[z][x];
+      if (tile.type === 'river_water') {
+        tile.landValue = 0;
+        continue;
+      }
+
+      const basePrice =
+        tile.elevation === 0 ? BASE_MARSH_LAND_PRICE : BASE_EMPTY_LAND_PRICE;
+      const spec = BUILDING_SPECS[tile.type];
+      const selfBuildingValue =
+        isBuiltStructure(tile.type) && spec
+          ? Math.max(0.02, spec.costBillion * 0.65)
+          : 0;
+      const drainageValue = tile.hasDrainage ? 0.02 : 0;
+
+      let diffusionDelta = 0;
+      const zMin = Math.max(0, z - 3);
+      const zMax = Math.min(rows - 1, z + 3);
+      const xMin = Math.max(0, x - 3);
+      const xMax = Math.min(cols - 1, x + 3);
+
+      for (let rz = zMin; rz <= zMax; rz++) {
+        for (let rx = xMin; rx <= xMax; rx++) {
+          if (rx === x && rz === z) continue;
+          const dist = Math.max(Math.abs(rx - x), Math.abs(rz - z));
+          if (dist > 3) continue;
+          const neighbor = grid[rz][rx];
+          const rawImpact = getNeighborLandImpact(neighbor.type);
+          if (rawImpact === 0) continue;
+          const falloff = (4 - dist) / 3; // dist 1 => 1.0, dist 2 => 0.667, dist 3 => 0.333
+          diffusionDelta += rawImpact * falloff;
+        }
+      }
+
+      const computed = Math.max(
+        0.0005,
+        Math.min(180, basePrice + selfBuildingValue + drainageValue + diffusionDelta)
+      );
+      tile.landValue = Number(computed.toFixed(3));
     }
   }
 }
@@ -336,6 +426,7 @@ export function detectGhostCollision(
     !toolId ||
     toolId === 'inspect' ||
     toolId === 'act_clearance' ||
+    toolId === 'act_reserve_land' ||
     toolId === 'sub_drainage'
   ) {
     return {
@@ -409,6 +500,36 @@ export function canPlaceToolAtTile(
   }
 
   const tile = state.grid[z][x];
+
+  if (activeTool === 'act_reserve_land') {
+    if (tile.type !== 'empty_land' && tile.type !== 'lowland_marsh') {
+      return {
+        allowed: false,
+        isGhostBuilding: false,
+        isColliding: true,
+        reason: 'Chỉ khoanh quỹ đất công trên Đất Trống hoặc Đất Trũng chưa xây dựng.',
+      };
+    }
+    if (tile.isReservedPublicLand) {
+      return {
+        allowed: false,
+        isGhostBuilding: false,
+        isColliding: false,
+        reason: 'Ô đất này đã được khoanh quỹ đất công.',
+      };
+    }
+    const reserveCost = Math.max(0.0005, tile.landValue);
+    if (state.treasury < reserveCost) {
+      return {
+        allowed: false,
+        isGhostBuilding: false,
+        isColliding: false,
+        reason: 'Ngân sách không đủ để đặt cọc khoanh đất.',
+      };
+    }
+    return { allowed: true, isGhostBuilding: false, isColliding: false };
+  }
+
   const targetType = activeTool as TileType;
   const spec = BUILDING_SPECS[targetType];
   if (!spec) {
@@ -515,6 +636,7 @@ export function evaluatePlacementRisk(
   if (
     toolId === 'inspect' ||
     toolId === 'act_clearance' ||
+    toolId === 'act_reserve_land' ||
     toolId === 'sub_drainage' ||
     isRoadTile(toolId as TileType)
   ) {
@@ -686,17 +808,18 @@ export function calculateLandClearanceCost(
 
   const diffClearanceMult = getDifficultySpec(difficulty).clearanceCostMultiplier;
 
+  const reservedDiscountMult = tile.isReservedPublicLand ? 0.3 : 1.0;
+
   if (!isBuiltStructure(tile.type)) {
     const baseWildPrice =
       tile.type === 'lowland_marsh'
         ? BASE_MARSH_LAND_PRICE
         : BASE_EMPTY_LAND_PRICE;
-    const wildCost = Number(
-      Math.max(
-        0.0005,
-        Math.min(0.0015, baseWildPrice * multiplier * diffClearanceMult)
-      ).toFixed(4)
+    const rawWildCost = Math.max(
+      0.0005,
+      Math.min(0.0015, baseWildPrice * multiplier * diffClearanceMult)
     );
+    const wildCost = Number((rawWildCost * reservedDiscountMult).toFixed(4));
     return {
       canClear: true,
       isWildLandClearance: true,
@@ -718,9 +841,11 @@ export function calculateLandClearanceCost(
       : 0.85;
 
   const compensationCost = Number(
-    Math.max(
-      0.005,
-      tile.landValue * multiplier * structureWeight * diffClearanceMult
+    (
+      Math.max(
+        0.005,
+        tile.landValue * multiplier * structureWeight * diffClearanceMult
+      ) * reservedDiscountMult
     ).toFixed(3)
   );
 
@@ -950,6 +1075,116 @@ export function applyToolToTile(
     };
   }
 
+  if (activeTool === 'act_reserve_land') {
+    if (tile.type !== 'empty_land' && tile.type !== 'lowland_marsh') {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner:
+            'Chỉ có thể Khoanh Quỹ Đất Công trên Đất Trống hoặc Đất Trũng chưa xây dựng.',
+        },
+        success: false,
+        message: 'Chỉ khoanh quỹ đất công trên đất trống/đất trũng.',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+
+    if (tile.isReservedPublicLand) {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner: `Ô đất (${x + 1}, ${z + 1}) đã được khoanh quỹ đất công trước đó!`,
+        },
+        success: false,
+        message: 'Ô đất đã được khoanh quỹ đất công.',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+
+    const reserveCost = Number(Math.max(0.0005, tile.landValue).toFixed(4));
+    if (state.treasury < reserveCost) {
+      return {
+        nextState: {
+          ...state,
+          selectedTile: { x, z },
+          lastEventBanner: `Ngân sách không đủ! Cần ${formatVnd(reserveCost, true)} (100% giá đất hiện tại) để khoanh quỹ đất công tại (${x + 1}, ${z + 1}).`,
+        },
+        success: false,
+        message: 'Ngân sách không đủ',
+        costDelta: 0,
+        effectType: 'error',
+      };
+    }
+
+    tile.isReservedPublicLand = true;
+    tile.reservedCostPaid = reserveCost;
+
+    const nextTreasury = Number((state.treasury - reserveCost).toFixed(4));
+    const nextMetrics = calculateMacroEconomy(
+      nextGrid,
+      state.policies,
+      state.season,
+      state.activeConcertMonths,
+      nextTreasury,
+      state.crisisMonthsElapsed,
+      state.difficulty
+    );
+
+    const reserveLedgerEntry: LedgerEntry = {
+      id: `RESERVE-Y${state.year}-M${state.month}-D${state.day}-${x + 1}x${z + 1}`,
+      day: state.day,
+      month: state.month,
+      year: state.year,
+      season: state.season,
+      entryType: 'daily_build',
+      summary: `Khoanh Quỹ Đất Công tại (${x + 1}, ${z + 1}) · Đặt cọc 100% giá đất (-${formatVnd(reserveCost, true)})`,
+      totalRevenue: 0,
+      totalTaxCIT: 0,
+      totalTaxPIT: 0,
+      totalMaintenanceCost: reserveCost,
+      buildingMaintenanceCost: 0,
+      infraMaintenanceCost: reserveCost,
+      welfareAndFloodCost: 0,
+      fdiBonus: 0,
+      monthlyPropertyTax: 0,
+      monthlyLandUseRevenue: 0,
+      monthlyBankNet: 0,
+      netIncome: Number((-reserveCost).toFixed(4)),
+      treasuryAfter: nextTreasury,
+      roadAndDrainageTileCount: 0,
+      activeEntityCount: 1,
+      entityBreakdown: [],
+    };
+    const nextGlobalLedger = [
+      ...(state.globalLedger ?? []),
+      reserveLedgerEntry,
+    ].slice(-60);
+    GlobalLedger.length = 0;
+    GlobalLedger.push(...nextGlobalLedger);
+
+    return {
+      nextState: {
+        ...state,
+        treasury: nextTreasury,
+        bestPci: Math.max(state.bestPci, nextMetrics.pci),
+        selectedTile: { x, z },
+        grid: nextGrid,
+        regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+        metrics: nextMetrics,
+        globalLedger: nextGlobalLedger,
+        lastEventBanner: `Đã khoanh Quỹ Đất Công tại (${x + 1}, ${z + 1}): đặt cọc -${formatVnd(reserveCost, true)} · Giảm 70% phí GPMB cho công trình công & đường bộ (chuột phải để Nhả đất/Cầm cố).`,
+      },
+      success: true,
+      message: 'Khoanh quỹ đất công thành công',
+      costDelta: -reserveCost,
+      effectType: 'build',
+    };
+  }
+
   if (activeTool === 'act_clearance') {
     const clearance = calculateLandClearanceCost(
       tile,
@@ -1004,8 +1239,12 @@ export function applyToolToTile(
     tile.assignedWorkers = { unskilled: 0, skilled: 0, educated: 0 };
     tile.lowEfficiencyMonths = 0;
     tile.localSupplyIndex = 100;
+    tile.isReservedPublicLand = false;
+    tile.reservedCostPaid = undefined;
     tile.landValue =
       tile.elevation === 0 ? BASE_MARSH_LAND_PRICE : BASE_EMPTY_LAND_PRICE;
+
+    recalculateGridLandValues(nextGrid);
 
     const nextTreasury = Number(
       (state.treasury - clearance.compensationCost).toFixed(4)
@@ -1125,6 +1364,38 @@ export function applyToolToTile(
   }
 
   let totalCost = spec.costBillion + bridgeSurcharge;
+  const wasReservedPublicLand = Boolean(tile.isReservedPublicLand);
+  const preBuildLandValue = tile.landValue;
+  let reservedDiscountNote = '';
+
+  // Nếu ô đã khoanh quỹ đất công và xây công trình công hoặc đường bộ: giảm 70% chi phí giải phóng mặt bằng/mặt bằng công
+  const isPublicOrRoadBuild =
+    isRoadTile(targetType) ||
+    isPublicServiceModule(targetType) ||
+    targetType === 'util_power_water';
+  if (wasReservedPublicLand && isPublicOrRoadBuild) {
+    const gpmbDiscount = Number(
+      Math.min(totalCost * 0.5, preBuildLandValue * 0.7).toFixed(4)
+    );
+    if (gpmbDiscount > 0) {
+      totalCost = Number(Math.max(0.001, totalCost - gpmbDiscount).toFixed(4));
+      reservedDiscountNote = ` · Quỹ đất công (-70% phí GPMB: tiết kiệm ${formatVnd(gpmbDiscount, true)})`;
+    }
+  }
+
+  // Thu tiền sử dụng đất 1 lần (12% * tile.landValue) khi xây dự án thương mại/chung cư cao cấp
+  const earnsLandUseFee =
+    targetType === 'res_high' ||
+    targetType === 'com_mall' ||
+    targetType === 'com_office';
+  const landUseRevenue = earnsLandUseFee
+    ? Number((0.12 * preBuildLandValue).toFixed(3))
+    : 0;
+  const landUseNote =
+    landUseRevenue > 0
+      ? ` · +Thu tiền sử dụng đất 1 lần: +${formatVnd(landUseRevenue, true)}`
+      : '';
+
   let snapMessage = '';
   let nextSeq = state.nextInstanceSeq || 1;
 
@@ -1152,6 +1423,8 @@ export function applyToolToTile(
         for (const gap of snapInfo.snappedGapTiles) {
           const gapTile = nextGrid[gap.z][gap.x];
           initializeTileWithSpec(gapTile, targetType, nextSeq++);
+          gapTile.isReservedPublicLand = false;
+          gapTile.reservedCostPaid = undefined;
           totalCost += spec.costBillion;
         }
         snapMessage = ` · Tự động bắt dính nối liền ${snapInfo.snappedGapTiles.length} ô đường tạo ${snapInfo.junctionLabel}`;
@@ -1186,8 +1459,15 @@ export function applyToolToTile(
     initializeTileWithSpec(tile, targetType, nextSeq++);
   }
 
+  tile.isReservedPublicLand = false;
+  tile.reservedCostPaid = undefined;
+
   refreshAllRoadJunctions(nextGrid);
-  const nextTreasury = Number((state.treasury - totalCost).toFixed(4));
+  recalculateGridLandValues(nextGrid);
+
+  const nextTreasury = Number(
+    (state.treasury - totalCost + landUseRevenue).toFixed(4)
+  );
   const nextMetrics = calculateMacroEconomy(
     nextGrid,
     state.policies,
@@ -1197,7 +1477,13 @@ export function applyToolToTile(
     state.crisisMonthsElapsed,
     state.difficulty
   );
+  if (landUseRevenue > 0) {
+    nextMetrics.monthlyLandUseRevenue = Number(
+      ((nextMetrics.monthlyLandUseRevenue ?? 0) + landUseRevenue).toFixed(3)
+    );
+  }
 
+  const netBuildCashflow = Number((landUseRevenue - totalCost).toFixed(4));
   const buildLedgerEntry: LedgerEntry = {
     id: `BUILD-Y${state.year}-M${state.month}-D${state.day}-${tile.instanceId ?? nextSeq}`,
     day: state.day,
@@ -1205,8 +1491,8 @@ export function applyToolToTile(
     year: state.year,
     season: state.season,
     entryType: 'daily_build',
-    summary: `Khởi công ${tile.customName ?? TILE_LABELS[targetType]} (${tile.instanceId}) tại (${x + 1}, ${z + 1})`,
-    totalRevenue: 0,
+    summary: `Khởi công ${tile.customName ?? TILE_LABELS[targetType]} (${tile.instanceId}) tại (${x + 1}, ${z + 1})${landUseNote}${reservedDiscountNote}`,
+    totalRevenue: landUseRevenue,
     totalTaxCIT: 0,
     totalTaxPIT: 0,
     totalMaintenanceCost: Number(totalCost.toFixed(4)),
@@ -1214,7 +1500,10 @@ export function applyToolToTile(
     infraMaintenanceCost: isRoadTile(targetType) ? Number(totalCost.toFixed(4)) : 0,
     welfareAndFloodCost: 0,
     fdiBonus: 0,
-    netIncome: Number((-totalCost).toFixed(4)),
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: landUseRevenue,
+    monthlyBankNet: 0,
+    netIncome: netBuildCashflow,
     treasuryAfter: nextTreasury,
     roadAndDrainageTileCount: isRoadTile(targetType) ? 1 : 0,
     activeEntityCount: 1,
@@ -1233,11 +1522,11 @@ export function applyToolToTile(
                 spec.requiredWorkers.skilled +
                 spec.requiredWorkers.educated
               } nhân sự`,
-        revenue: 0,
+        revenue: landUseRevenue,
         taxCIT: 0,
         taxPIT: 0,
         maintenanceCost: Number(totalCost.toFixed(4)),
-        netIncome: Number((-totalCost).toFixed(4)),
+        netIncome: netBuildCashflow,
       },
     ],
   };
@@ -1287,11 +1576,261 @@ export function applyToolToTile(
       onboardingStep: obEval.onboardingStep,
       onboardingCompleted: obEval.onboardingCompleted,
       completedQuests: obEval.completedQuests,
-      lastEventBanner: `Khởi công ${tile.customName ?? TILE_LABELS[targetType]} [${tile.instanceId}] tại (${x + 1}, ${z + 1}): -${formatVnd(totalCost, true)} · Hoàn thiện sau ${spec.constructionDays} ngày${capNote}${snapMessage}.`,
+      lastEventBanner: `Khởi công ${tile.customName ?? TILE_LABELS[targetType]} [${tile.instanceId}] tại (${x + 1}, ${z + 1}): -${formatVnd(totalCost, true)} · Hoàn thiện sau ${spec.constructionDays} ngày${capNote}${snapMessage}${reservedDiscountNote}${landUseNote}.`,
     },
     success: true,
     message: `Khởi công ${TILE_LABELS[targetType]}`,
-    costDelta: -totalCost,
+    costDelta: netBuildCashflow,
+    effectType: 'build',
+  };
+}
+
+/**
+ * Gỡ vốn Land Banking (`unreservePublicLand`):
+ * Hủy đánh dấu `isReservedPublicLand` trên ô đất trống đã khoanh và hoàn trả 85% tiền cọc về Ngân sách.
+ */
+export function unreservePublicLand(
+  state: CityGameState,
+  x: number,
+  z: number
+): ToolActionResult {
+  if (z < 0 || z >= state.grid.length || x < 0 || x >= state.grid[0].length) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Tọa độ không hợp lệ.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const targetTile = state.grid[z][x];
+  if (!targetTile.isReservedPublicLand) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Ô đất này chưa được khoanh quỹ đất công.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const isCollateralized = (state.loans ?? []).some(
+    (loan) =>
+      loan.collateralTile &&
+      loan.collateralTile.x === x &&
+      loan.collateralTile.z === z
+  );
+  if (isCollateralized) {
+    return {
+      nextState: {
+        ...state,
+        lastEventBanner: `Không thể nhả ô đất (${x + 1}, ${z + 1}) vì đang được cầm cố thế chấp tại Ngân hàng Đô thị! Hãy tất toán khoản vay trước.`,
+      },
+      success: false,
+      message: 'Ô đất đang được thế chấp tại Ngân hàng.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const nextGrid = state.grid.map((row) =>
+    row.map((cell) => ({
+      ...cell,
+      occupantsByTier: { ...cell.occupantsByTier },
+      requiredWorkers: { ...cell.requiredWorkers },
+      assignedWorkers: { ...cell.assignedWorkers },
+    }))
+  );
+  const tile = nextGrid[z][x];
+  const basePaid = tile.reservedCostPaid ?? tile.landValue;
+  const refundAmount = Number((0.85 * basePaid).toFixed(4));
+
+  tile.isReservedPublicLand = false;
+  tile.reservedCostPaid = undefined;
+
+  const regKey = `${state.activeRegion.rx},${state.activeRegion.rz}`;
+  const nextTreasury = Number((state.treasury + refundAmount).toFixed(4));
+  const nextMetrics = calculateMacroEconomy(
+    nextGrid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+
+  const ledgerEntry: LedgerEntry = {
+    id: `UNRES-Y${state.year}-M${state.month}-D${state.day}-${x + 1}x${z + 1}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Nhả Quỹ Đất Công tại (${x + 1}, ${z + 1}): Hoàn cọc 85% (+${formatVnd(refundAmount, true)})`,
+    totalRevenue: refundAmount,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: 0,
+    buildingMaintenanceCost: 0,
+    infraMaintenanceCost: 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: 0,
+    netIncome: refundAmount,
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: 0,
+    activeEntityCount: 1,
+    entityBreakdown: [],
+  };
+  const nextGlobalLedger = [...(state.globalLedger ?? []), ledgerEntry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      grid: nextGrid,
+      regionGrids: { ...state.regionGrids, [regKey]: nextGrid },
+      metrics: nextMetrics,
+      globalLedger: nextGlobalLedger,
+      lastEventBanner: `Đã nhả Quỹ Đất Công ô (${x + 1}, ${z + 1}) và hoàn trả 85% cọc: +${formatVnd(refundAmount, true)} vào Ngân sách.`,
+    },
+    success: true,
+    message: `Nhả đất thành công (+${formatVnd(refundAmount, true)})`,
+    costDelta: refundAmount,
+    effectType: 'clearance',
+  };
+}
+
+/**
+ * Cầm cố Quỹ Đất Công (`mortgageReservedLand`):
+ * Cho vay thế chấp bằng 70% * tile.landValue với lãi suất ưu đãi 0.6%/tháng (kỳ hạn 6 tháng),
+ * gắn `collateralTile`. Nếu quá hạn khi đáo hạn mà không đủ tiền trả, tự động thanh lý quỹ đất công.
+ */
+export function mortgageReservedLand(
+  state: CityGameState,
+  x: number,
+  z: number
+): ToolActionResult {
+  if (z < 0 || z >= state.grid.length || x < 0 || x >= state.grid[0].length) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Tọa độ không hợp lệ.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const tile = state.grid[z][x];
+  if (!tile.isReservedPublicLand) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Chỉ có thể cầm cố ô đất đã khoanh quỹ đất công.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const alreadyMortgaged = (state.loans ?? []).some(
+    (loan) =>
+      loan.collateralTile &&
+      loan.collateralTile.x === x &&
+      loan.collateralTile.z === z
+  );
+  if (alreadyMortgaged) {
+    return {
+      nextState: {
+        ...state,
+        lastEventBanner: `Ô đất (${x + 1}, ${z + 1}) hiện đã được cầm cố thế chấp cho một khoản vay đang chạy!`,
+      },
+      success: false,
+      message: 'Ô đất đã được cầm cố trước đó.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const principal = Number((0.7 * tile.landValue).toFixed(4));
+  if (principal < 0.0001) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Giá trị đất quá thấp để thế chấp.',
+      costDelta: 0,
+      effectType: 'error',
+    };
+  }
+
+  const newLoan: BankLoan = {
+    id: `MORT-Y${state.year}-M${state.month}-D${state.day}-${x + 1}x${z + 1}`,
+    principal,
+    remainingPrincipal: principal,
+    monthlyRatePercent: 0.6,
+    totalMonths: 6,
+    remainingMonths: 6,
+    collateralTile: { x, z },
+  };
+
+  const nextTreasury = Number((state.treasury + principal).toFixed(4));
+  const nextLoans = [...(state.loans ?? []), newLoan];
+  const nextMetrics = calculateMacroEconomy(
+    state.grid,
+    state.policies,
+    state.season,
+    state.activeConcertMonths,
+    nextTreasury,
+    state.crisisMonthsElapsed,
+    state.difficulty
+  );
+
+  const ledgerEntry: LedgerEntry = {
+    id: `BANK-MORT-${newLoan.id}`,
+    day: state.day,
+    month: state.month,
+    year: state.year,
+    season: state.season,
+    entryType: 'daily_build',
+    summary: `Cầm cố Quỹ Đất Công (${x + 1}, ${z + 1}) vay 70% giá trị (+${formatVnd(principal, true)} · 0,6%/th · 6 tháng)`,
+    totalRevenue: principal,
+    totalTaxCIT: 0,
+    totalTaxPIT: 0,
+    totalMaintenanceCost: 0,
+    buildingMaintenanceCost: 0,
+    infraMaintenanceCost: 0,
+    welfareAndFloodCost: 0,
+    fdiBonus: 0,
+    monthlyPropertyTax: 0,
+    monthlyLandUseRevenue: 0,
+    monthlyBankNet: principal,
+    netIncome: principal,
+    treasuryAfter: nextTreasury,
+    roadAndDrainageTileCount: 0,
+    activeEntityCount: 1,
+    entityBreakdown: [],
+  };
+  const nextGlobalLedger = [...(state.globalLedger ?? []), ledgerEntry].slice(-60);
+  GlobalLedger.length = 0;
+  GlobalLedger.push(...nextGlobalLedger);
+
+  return {
+    nextState: {
+      ...state,
+      treasury: nextTreasury,
+      loans: nextLoans,
+      metrics: nextMetrics,
+      globalLedger: nextGlobalLedger,
+      lastEventBanner: `Đã cầm cố Quỹ Đất Công (${x + 1}, ${z + 1}): giải ngân +${formatVnd(principal, true)} (lãi suất ưu đãi 0,6%/tháng, kỳ hạn 6 tháng).`,
+    },
+    success: true,
+    message: `Giải ngân vay thế chấp +${formatVnd(principal, true)}`,
+    costDelta: principal,
     effectType: 'build',
   };
 }

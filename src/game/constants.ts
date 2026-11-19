@@ -1071,6 +1071,7 @@ export function getBuildingFinancialPreview(
     const paybackMonths =
       netMonthly > 0.01 ? Math.max(1, Math.ceil(costBillion / netMonthly)) : null;
 
+    const isEduMed = tileType === 'priv_hospital' || tileType === 'priv_school';
     return {
       costBillion,
       costLabel: formatVnd(costBillion),
@@ -1079,7 +1080,9 @@ export function getBuildingFinancialPreview(
       requiredWorkersTotal,
       workersLabel,
       expectedMonthlyTaxOrOutputBillion: Number(totalTaxContribution.toFixed(2)),
-      expectedTaxOrOutputLabel: `+${formatVnd(totalTaxContribution)}/th (SL ${formatVnd(spec.baseGrossOutputBillion)})`,
+      expectedTaxOrOutputLabel: isEduMed
+        ? `+${formatVnd(totalTaxContribution)}/th (CIT ${citRate}% XHH)`
+        : `+${formatVnd(totalTaxContribution)}/th (SL ${formatVnd(spec.baseGrossOutputBillion)})`,
       paybackMonths,
       paybackLabel: paybackMonths !== null ? `~${paybackMonths} tháng` : 'Chưa hoàn vốn',
       isPublicInvestment: false,
