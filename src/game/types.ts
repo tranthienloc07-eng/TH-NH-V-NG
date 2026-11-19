@@ -79,7 +79,8 @@ export type ToolId =
   | 'road_ring'
   | 'road_highway'
   | 'sub_drainage'     // Hệ thống cống ngầm thoát nước chống ngập (1 - 2 ngày)
-  | 'act_clearance';   // Đền bù giải tỏa mặt bằng (Land Clearance)
+  | 'act_clearance'    // Đền bù giải tỏa mặt bằng (Land Clearance)
+  | 'act_reserve_land';// Khoanh Quỹ Đất Công (Land Banking)
 
 export type CompensationLevel = 'low' | 'fair' | 'generous';
 
@@ -143,11 +144,33 @@ export interface LedgerEntry {
   infraMaintenanceCost: number;    // Tổng phí duy trì của đường bộ road_* và cống ngầm sub_drainage
   welfareAndFloodCost: number;
   fdiBonus: number;
+  monthlyPropertyTax?: number;     // Thuế BĐS định kỳ từ res_high và com_* (Tỷ VNĐ)
+  monthlyLandUseRevenue?: number;  // Thu tiền sử dụng đất 1 lần khi xây res_high, com_mall, com_office (Tỷ VNĐ)
+  monthlyBankNet?: number;         // Dòng tiền ròng từ Ngân hàng Đô thị (Vay/Trả nợ/Gửi tiết kiệm, Tỷ VNĐ)
   netIncome: number;
   treasuryAfter: number;
   roadAndDrainageTileCount: number;
   activeEntityCount: number;
   entityBreakdown: EntityLedgerRecord[];
+}
+
+export interface BankLoan {
+  id: string;
+  principal: number;
+  remainingPrincipal: number;
+  monthlyRatePercent: number;
+  totalMonths: number;
+  remainingMonths: number;
+  collateralTile?: { x: number; z: number };
+}
+
+export interface BankDeposit {
+  id: string;
+  amount: number;
+  monthlyRatePercent: number;
+  totalMonths: number;
+  remainingMonths: number;
+  accruedInterest: number;
 }
 
 export interface TileData {
@@ -156,6 +179,8 @@ export interface TileData {
   type: TileType;
   elevation: number;        // 0 = vùng trũng ven sông, 1 = đất bằng, 2 = gò cao
   landValue: number;        // Khung giá đất (Tỷ VNĐ, đất hoang khởi điểm 0.0005 - 0.001 Tỷ = 500k - 1 Triệu VNĐ)
+  isReservedPublicLand?: boolean; // Đã khoanh quỹ đất công (giảm 70% phí GPMB cho công trình công/đường bộ)
+  reservedCostPaid?: number;      // Số tiền đặt cọc đã chi khi khoanh quỹ đất công (Tỷ VNĐ)
   hasDrainage: boolean;     // Đã hoàn thiện cống ngầm thoát nước chưa
   drainageRemainingDays?: number; // Thời gian thi công lắp ống thoát nước (1 ngày)
   isFlooded: boolean;       // Đang bị ngập do mưa bão / triều cường
@@ -321,6 +346,10 @@ export interface MacroMetrics {
   pollutionPenaltyHappiness?: number;   // Điểm trừ Hạnh phúc do ô nhiễm từ ind_factory gần khu dân cư
   totalRegionalPopulation?: number;     // Tổng dân số gộp trên toàn bộ các vùng đã mở khóa
   totalRegionalJobs?: number;           // Tổng việc làm gộp trên toàn bộ các vùng đã mở khóa
+  monthlyPropertyTax?: number;          // Thuế BĐS định kỳ từ res_high và com_* (Tỷ/tháng)
+  monthlyLandUseRevenue?: number;       // Tiền sử dụng đất 1 lần thu trong tháng (Tỷ/tháng)
+  monthlyBankNet?: number;              // Dòng tiền ngân hàng dự kiến trong tháng (Tỷ/tháng)
+  highLandValueResLowWithoutTransit?: number; // Số ô res_low tại vùng giá đất > 8 Tỷ nhưng chưa bật Bus/BRT
 }
 
 export interface BuildingFinancialPreview {
@@ -446,6 +475,8 @@ export interface CityGameState {
   onboardingStep: number;                   // Bước nhiệm vụ tân thủ hiện tại (1..5)
   onboardingCompleted: boolean;             // Đã hoàn thành toàn bộ chuỗi nhiệm vụ khởi nghiệp chưa
   completedQuests: string[];                // Danh sách ID các nhiệm vụ đã hoàn thành
+  loans: BankLoan[];                        // Danh sách khoản vay Ngân hàng Đô thị đang hoạt động
+  deposits: BankDeposit[];                  // Danh sách sổ tiết kiệm Ngân hàng Đô thị đang gửi
   lastSavedAt?: string | null;              // Thời điểm Auto-Save gần nhất
 }
 

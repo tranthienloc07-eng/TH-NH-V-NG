@@ -721,6 +721,19 @@ export const TOOLS: ToolMetadata[] = [
     description:
       'Giải tỏa đất nông nghiệp/đất hoang giá chỉ 500.000đ - 1 Triệu VNĐ/ô; giải tỏa công trình kiên cố tính theo khung giá đất thực tế.',
   },
+  {
+    id: 'act_reserve_land',
+    name: 'Khoanh Quỹ Đất Công (Đặt Cọc 100% Giá Đất Hiện Tại)',
+    shortName: 'Khoanh Đất Công',
+    category: 'special',
+    cost: 0,
+    constructionDays: 1,
+    keyHint: '3',
+    roleClue: 'Tab [F4 · 3] · Đặt cọc giữ giá đất rẻ · Giảm 70% phí GPMB cho công trình công & đường bộ',
+    prerequisiteLabel: 'Đặt trên Đất Trống hoặc Đất Trũng chưa xây dựng',
+    description:
+      'Đặt cọc 100% giá đất hiện tại để khoanh quỹ đất công trước khi giá đất sốt tăng vọt. Khi xây đường bộ hoặc công trình công lên ô đã khoanh sẽ được giảm 70% chi phí GPMB; có thể Nhả đất hoàn 85% cọc hoặc Cầm cố vay 70% giá trị đất hiện tại.',
+  },
 ];
 
 export const TILE_LABELS: Record<TileType, string> = {
@@ -936,6 +949,22 @@ export function getBuildingFinancialPreview(
     };
   }
 
+  if (specOrTool === 'act_reserve_land') {
+    return {
+      costBillion: 0,
+      costLabel: '100% Giá đất ô',
+      upkeepBillion: 0,
+      upkeepLabel: '0 Tỷ/th',
+      requiredWorkersTotal: 0,
+      workersLabel: '0 người',
+      expectedMonthlyTaxOrOutputBillion: 0,
+      expectedTaxOrOutputLabel: '-70% GPMB công / Thế chấp vay 70%',
+      paybackMonths: null,
+      paybackLabel: 'Chi đầu tư công',
+      isPublicInvestment: true,
+    };
+  }
+
   if (specOrTool === 'act_clearance' || specOrTool === 'inspect') {
     return {
       costBillion: 0,
@@ -981,13 +1010,14 @@ export function getBuildingFinancialPreview(
   let citRate = 0;
   if (tileType === 'agr_farm') citRate = policies.citAgri;
   else if (tileType === 'ind_factory' || tileType === 'ind_food') citRate = policies.citIndustry;
-  else if (
+  else if (tileType === 'priv_hospital' || tileType === 'priv_school') {
+    // Ưu đãi thuế Xã hội hóa Y tế & Giáo dục: bằng 50% thuế Thương mại, tối đa 10% (tối thiểu 5%)
+    citRate = Math.min(10, Math.max(5, Math.round(policies.citMarket * 0.5)));
+  } else if (
     tileType === 'com_street' ||
     tileType === 'com_market' ||
     tileType === 'com_mall' ||
-    tileType === 'com_office' ||
-    tileType === 'priv_hospital' ||
-    tileType === 'priv_school'
+    tileType === 'com_office'
   ) {
     citRate = policies.citMarket;
   } else if (tileType === 'ind_fdi') citRate = policies.citFdi;
@@ -1240,6 +1270,7 @@ export const TOOL_UNLOCK_LEVEL: Record<ToolId, CityLevel> = {
   util_power_water: 1,
   sub_drainage: 1,
   act_clearance: 1,
+  act_reserve_land: 1,
 
   road_ring: 2,
   ind_food: 2,
@@ -1268,6 +1299,7 @@ export type PolicyLockKey =
   | keyof MacroPolicies
   | 'pit'
   | 'cit'
+  | 'bank'
   | 'compensation'
   | 'welfare'
   | 'concert'
@@ -1278,6 +1310,7 @@ export const POLICY_UNLOCK_LEVEL: Record<PolicyLockKey, CityLevel> = {
   pitLow: 2,
   pitMid: 2,
   pitEducated: 2,
+  bank: 2,
 
   compensation: 3,
   welfare: 3,
