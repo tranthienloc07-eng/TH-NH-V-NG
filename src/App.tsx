@@ -6,6 +6,8 @@ import {
   HoverTileInfo,
 } from './components/CityViewport3D';
 import { BankModal } from './components/BankModal';
+import { BottomBuildDock, DockTooltipInfo } from './components/BottomBuildDock';
+import { renderMinimalistDockIcon } from './components/dockIcons';
 import { GameModals } from './components/GameModals';
 import { MacroPolicyDrawer } from './components/MacroPolicyDrawer';
 import {
@@ -15,6 +17,7 @@ import {
   MonthlySettlementModal,
   RegionMap9x9Modal,
 } from './components/OverlaysAndGuides';
+import { TopHudBar } from './components/TopHudBar';
 import { soundEngine } from './game/audio';
 import {
   applyToolToTile,
@@ -32,7 +35,6 @@ import {
   generateCityAdvisorBriefing,
   getBuildingFinancialPreview,
   getPolicyUnlockRequirementLabel,
-  getRegionName,
   getToolUnlockRequirementLabel,
   hasPlayerActuallyPlayed,
   isBuiltStructure,
@@ -65,273 +67,18 @@ import {
   SeasonType,
   ToolId,
 } from './game/types';
+import { DockCategory, useGameHotkeys } from './hooks/useGameHotkeys';
 
-function renderMinimalistDockIcon(iconId: string): React.ReactNode {
-  switch (iconId) {
-    // Category tabs
-    case 'cat_road':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 19L8 5M16 5l4 14M12 6v2M12 11v2M12 16v2" />
-        </svg>
-      );
-    case 'cat_zoning':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="14" width="7" height="7" rx="1" />
-          <rect x="3" y="14" width="7" height="7" rx="1" />
-        </svg>
-      );
-    case 'cat_infra':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6M12 9v4M10 11h4" />
-        </svg>
-      );
-    case 'cat_special':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-        </svg>
-      );
+function detectTouchPointer(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia('(pointer: coarse)').matches
+  );
+}
 
-    // Road tools
-    case 'road_alley':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M7 20L10 4M14 4l3 16M12 10v4" />
-        </svg>
-      );
-    case 'road_urban':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 20L7 4M17 4l3 16M12 5v3M12 11v3M12 17v2" />
-        </svg>
-      );
-    case 'road_highway':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 20L5 4M19 4l3 16M9 4v16M15 4v16M12 6v3M12 14v3" />
-        </svg>
-      );
-    case 'road_ring':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="8" />
-          <circle cx="12" cy="12" r="4" />
-        </svg>
-      );
-
-    // Zoning tools
-    case 'res_low':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9.5z" />
-          <path d="M9 21V13h6v8" />
-        </svg>
-      );
-    case 'res_mid':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="5" y="4" width="14" height="17" rx="1" />
-          <path d="M9 8h2M13 8h2M9 12h2M13 12h2M10 21v-4h4v4" />
-        </svg>
-      );
-    case 'res_high':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 21V3h12v18M3 21h18M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2" />
-        </svg>
-      );
-    case 'com_market':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 9l2-5h14l2 5M3 9c0 1.66 1.34 3 3 3s3-1.34 3-3c0 1.66 1.34 3 3 3s3-1.34 3-3c0 1.66 1.34 3 3 3s3-1.34 3-3M5 12v8h14v-8" />
-        </svg>
-      );
-    case 'com_mall':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0" />
-        </svg>
-      );
-    case 'agr_farm':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 20V8M12 14c-3.5 0-6-2.5-6-6 3.5 0 6 2.5 6 6zM12 11c3.5 0 6-2.5 6-6-3.5 0-6 2.5-6 6zM4 20h16" />
-        </svg>
-      );
-    case 'ind_factory':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 20h20V9l-6 4V9l-6 4V4H4v16z" />
-        </svg>
-      );
-    case 'ind_fdi':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="7" y="7" width="10" height="10" rx="1" />
-          <path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4" />
-        </svg>
-      );
-    case 'com_office':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="4" y="2" width="16" height="20" rx="2" />
-          <path d="M9 6h6M9 10h6M9 14h6M10 22v-4h4v4" />
-        </svg>
-      );
-    case 'ind_food':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 20h18V10l-5-4H8l-5 4v10z" />
-          <path d="M9 14h6M12 11v6" />
-        </svg>
-      );
-
-    // Infra tools
-    case 'pub_admin':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 21h18M4 10h16M6 10v8M10 10v8M14 10v8M18 10v8M12 3l9 5H3l9-5z" />
-        </svg>
-      );
-    case 'pub_edu_med':
-    case 'pub_hospital':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="4" y="4" width="16" height="16" rx="2" />
-          <path d="M12 8v8M8 12h8" />
-        </svg>
-      );
-    case 'priv_hospital':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
-          <path d="M12 8v6M9 11h6" />
-        </svg>
-      );
-    case 'pub_school':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
-          <path d="M6 12v5c3 3 9 3 12 0v-5" />
-        </svg>
-      );
-    case 'priv_school':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M3.6 9h16.8M3.6 15h16.8M11.5 3a17 17 0 0 0 0 18M12.5 3a17 17 0 0 1 0 18" />
-        </svg>
-      );
-    case 'pub_security':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        </svg>
-      );
-    case 'util_power_water':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
-      );
-    case 'showbiz_stadium':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-      );
-
-    // Special tools
-    case 'sub_drainage':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />
-        </svg>
-      );
-    case 'act_clearance':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-        </svg>
-      );
-    case 'act_reserve_land':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="4" y="4" width="16" height="16" rx="2" strokeDasharray="3 2" />
-          <path d="M12 8v8M8 12h8" />
-        </svg>
-      );
-
-    // Utility & Policy icons
-    case 'util_bank':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 10h18M5 10v8M9 10v8M15 10v8M19 10v8M2 18h20M12 3l9 5H3l9-5z" />
-        </svg>
-      );
-    case 'util_economy':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="12" y1="1" x2="12" y2="23" />
-          <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-        </svg>
-      );
-    case 'util_traffic':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="7" y="2" width="10" height="20" rx="3" />
-          <circle cx="12" cy="7" r="1.5" />
-          <circle cx="12" cy="12" r="1.5" />
-          <circle cx="12" cy="17" r="1.5" />
-        </svg>
-      );
-    case 'util_ledger':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-          <line x1="8" y1="13" x2="16" y2="13" />
-          <line x1="8" y1="17" x2="16" y2="17" />
-        </svg>
-      );
-    case 'util_inspect':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="7" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-      );
-    case 'util_collapse':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      );
-    case 'util_advisor':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 2a4 4 0 0 1 4 4v1a3 3 0 0 1 2 2.83V11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9.83A3 3 0 0 1 8 7V6a4 4 0 0 1 4-4z" />
-          <path d="M9 17h6M10 21h4M12 13v4" />
-        </svg>
-      );
-    case 'util_expand':
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="18 15 12 9 6 15" />
-        </svg>
-      );
-    default:
-      return (
-        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="2">
-          <circle cx="12" cy="12" r="8" />
-        </svg>
-      );
-  }
+function detectCompactOrTouch(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.innerWidth < 900 || detectTouchPointer();
 }
 
 export default function App() {
@@ -350,21 +97,39 @@ export default function App() {
     return createInitialGameState(autostart);
   });
 
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(detectTouchPointer);
+  const [isCompactViewport, setIsCompactViewport] =
+    useState<boolean>(detectCompactOrTouch);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const coarseMq = window.matchMedia('(pointer: coarse)');
+    const syncViewportFlags = () => {
+      const touch = coarseMq.matches;
+      setIsTouchDevice(touch);
+      setIsCompactViewport(window.innerWidth < 900 || touch);
+    };
+    syncViewportFlags();
+    window.addEventListener('resize', syncViewportFlags);
+    coarseMq.addEventListener?.('change', syncViewportFlags);
+    return () => {
+      window.removeEventListener('resize', syncViewportFlags);
+      coarseMq.removeEventListener?.('change', syncViewportFlags);
+    };
+  }, []);
+
   // Mặc định mở tab 'road' đầu tiên để người chơi dễ dàng xây đường nối liền ngay từ đầu
-  const [dockCategory, setDockCategory] = useState<
-    'road' | 'zoning' | 'infra' | 'special'
-  >('road');
+  const [dockCategory, setDockCategory] = useState<DockCategory>('road');
   const [activePolicyDrawer, setActivePolicyDrawer] = useState<
     'economy' | 'traffic' | null
   >(null);
   const [dockCollapsed, setDockCollapsed] = useState(false);
-  const [onboardingCollapsed, setOnboardingCollapsed] = useState(false);
-  const [hoveredDockTooltip, setHoveredDockTooltip] = useState<{
-    title: string;
-    shortcut: string;
-    meta?: string;
-    financialPreview?: BuildingFinancialPreview;
-  } | null>(null);
+  // Trên Mobile (<900px) hoặc thiết bị cảm ứng: mặc định thu gọn Onboarding & đóng Cố vấn để giải phóng >75% màn hình 3D
+  const [onboardingCollapsed, setOnboardingCollapsed] = useState<boolean>(
+    detectCompactOrTouch
+  );
+  const [hoveredDockTooltip, setHoveredDockTooltip] =
+    useState<DockTooltipInfo | null>(null);
   const [pendingPlacementRisk, setPendingPlacementRisk] = useState<{
     x: number;
     z: number;
@@ -388,7 +153,9 @@ export default function App() {
     string | null
   >(null);
   const [isMuted, setIsMuted] = useState(false);
-  const [graphicQuality, setGraphicQuality] = useState<GraphicQuality>('high');
+  const [graphicQuality, setGraphicQuality] = useState<GraphicQuality>(() =>
+    detectTouchPointer() ? 'medium' : 'high'
+  );
   const [hasManualQualityOverride, setHasManualQualityOverride] =
     useState(false);
   const [cameraPresetTrigger, setCameraPresetTrigger] = useState(0);
@@ -412,15 +179,22 @@ export default function App() {
     setGraphicQuality((prev) => (prev === 'high' ? 'medium' : 'high'));
   }, []);
 
-  // Mỗi cuối tháng khi có Báo Cáo Quyết Toán mới, Trợ Lý Cố Vấn Kinh Tế đồng thời tự động xuất hiện ngay trên thanh HUD (không dùng pop-up che màn hình)
+  // Mỗi cuối tháng khi có Báo Cáo Quyết Toán mới, tự động mở Trợ Lý Cố Vấn trên Desktop;
+  // trên Mobile (<900px / touch) giữ đóng để không che >75% màn hình 3D (chỉ hiện badge số gợi ý).
   useEffect(() => {
     const reportId = gameState.latestSettlementReport?.id ?? null;
     if (reportId && reportId !== lastAutoAdvisorReportId) {
       setLastAutoAdvisorReportId(reportId);
-      setAdvisorHudOpen(true);
+      if (!isCompactViewport) {
+        setAdvisorHudOpen(true);
+      }
       soundEngine.playAdvisorAlert();
     }
-  }, [gameState.latestSettlementReport?.id, lastAutoAdvisorReportId]);
+  }, [
+    gameState.latestSettlementReport?.id,
+    lastAutoAdvisorReportId,
+    isCompactViewport,
+  ]);
 
   const handleToggleAdvisorHud = useCallback(() => {
     soundEngine.playClick();
@@ -1244,8 +1018,6 @@ export default function App() {
         )
       : null;
 
-  const filteredTools = TOOLS.filter((t) => t.category === dockCategory);
-
   const seasonLabel =
     gameState.season === 'dry'
       ? 'Mùa Khô'
@@ -1253,42 +1025,17 @@ export default function App() {
       ? 'Mùa Mưa Bão'
       : 'Đỉnh Triều Cường';
 
-  const categoryTabs: {
-    id: typeof dockCategory;
-    iconId: string;
-    title: string;
-    shortcut: string;
-    tabKey: string;
-  }[] = [
-    {
-      id: 'road',
-      iconId: 'cat_road',
-      title: 'Giao Thông & Đường',
-      shortcut: 'F1 · 1-4',
-      tabKey: 'F1',
-    },
-    {
-      id: 'zoning',
-      iconId: 'cat_zoning',
-      title: 'Phân Lô Dân Cư & KT',
-      shortcut: 'F2 · 1-0',
-      tabKey: 'F2',
-    },
-    {
-      id: 'infra',
-      iconId: 'cat_infra',
-      title: 'Hạ Tầng Công & Tư',
-      shortcut: 'F3 · 1-8',
-      tabKey: 'F3',
-    },
-    {
-      id: 'special',
-      iconId: 'cat_special',
-      title: 'Giải Tỏa, Cống & Quỹ Đất',
-      shortcut: 'F4 · 1-3',
-      tabKey: 'F4',
-    },
-  ];
+  const pendingPlacementFinancialPreview =
+    pendingPlacementRisk &&
+    pendingPlacementRisk.toolId !== 'inspect' &&
+    pendingPlacementRisk.toolId !== 'act_clearance' &&
+    pendingPlacementRisk.toolId !== 'sub_drainage'
+      ? getBuildingFinancialPreview(
+          pendingPlacementRisk.toolId,
+          gameState.policies,
+          gameState.difficulty
+        )
+      : null;
 
   return (
     <main className="relative w-screen h-screen overflow-hidden select-none bg-[#0c141d]">
@@ -1305,8 +1052,8 @@ export default function App() {
         pulseEventCount={pulseEventCount}
       />
 
-      {/* Lightweight Hover Name Badge (hiện [InstanceID], CustomName, cảnh báo va chạm đỏ rực, sức chứa 0/MaxCapacity) */}
-      {gameState.mode === 'playing' && (
+      {/* Lightweight Hover Name Badge (tự ẩn trên thiết bị cảm ứng để không cản trở thao tác vuốt) */}
+      {gameState.mode === 'playing' && !isTouchDevice && (
         <BuildingHoverTooltip
           hoverInfo={hoverInfo}
           grid={gameState.grid}
@@ -1376,9 +1123,9 @@ export default function App() {
               {pendingPlacementRisk.risk.warningMessage}
             </p>
 
-            <div className="grid grid-cols-2 gap-2 text-[11px] bg-black/35 rounded-xl p-2.5 border border-amber-500/30">
+            <div className="grid grid-cols-2 gap-2 text-xs bg-black/35 rounded-xl p-2.5 border border-amber-500/30">
               <div>
-                <div className="text-amber-300/80 text-[10px]">Nhân sự thiếu hụt:</div>
+                <div className="text-amber-300/80 text-xs">Nhân sự thiếu hụt:</div>
                 <div
                   data-testid="placement-risk-missing-workers"
                   className="font-mono font-extrabold text-amber-200"
@@ -1389,7 +1136,7 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <div className="text-amber-300/80 text-[10px]">Thâm hụt dự kiến/tháng:</div>
+                <div className="text-amber-300/80 text-xs">Thâm hụt dự kiến/tháng:</div>
                 <div
                   data-testid="placement-risk-deficit"
                   className="font-mono font-extrabold text-rose-300"
@@ -1398,6 +1145,44 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {pendingPlacementFinancialPreview && (
+              <div
+                data-testid="placement-risk-5-metrics"
+                className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-xs font-mono bg-[#0b1520]/85 rounded-xl p-2.5 border border-amber-400/30"
+              >
+                <div>
+                  <span className="text-slate-400 font-sans">1. Vốn: </span>
+                  <span className="text-amber-300 font-bold">
+                    {pendingPlacementFinancialPreview.costLabel}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-sans">2. Upkeep: </span>
+                  <span className="text-rose-300 font-bold">
+                    {pendingPlacementFinancialPreview.upkeepLabel}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-sans">3. Nhân sự: </span>
+                  <span className="text-sky-300 font-bold">
+                    {pendingPlacementFinancialPreview.workersLabel}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-sans">4. Kỳ vọng: </span>
+                  <span className="text-emerald-300 font-bold">
+                    {pendingPlacementFinancialPreview.expectedTaxOrOutputLabel}
+                  </span>
+                </div>
+                <div className="col-span-2 sm:col-span-2">
+                  <span className="text-slate-400 font-sans">5. Hoàn vốn: </span>
+                  <span className="text-cyan-300 font-bold">
+                    {pendingPlacementFinancialPreview.paybackLabel}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-2 pt-1">
               <button
@@ -1431,472 +1216,91 @@ export default function App() {
       {/* Playing HUD Overlay (z-index: 1000) — Thích nghi & tự co giãn trên cả Desktop lẫn Mobile */}
       {gameState.mode === 'playing' && (
         <div className="fixed inset-0 hud-overlay-layer z-[1000] pointer-events-none flex flex-col justify-between p-1.5 sm:p-2">
-          <div className="w-full flex flex-wrap items-start justify-between gap-1">
-            {/* Top-Left Cluster (.top-bar .hud-container) */}
-            <div
-              onMouseMove={stopHudPropagation}
-              onMouseOver={stopHudPropagation}
-              onClick={stopHudPropagation}
-              onPointerDown={stopHudPropagation}
-              onPointerMove={stopHudPropagation}
-              onPointerUp={stopHudPropagation}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                stopHudPropagation(e);
+          <div className="w-full flex flex-col gap-1.5 pointer-events-none">
+            <TopHudBar
+              gameState={gameState}
+              currentLevelSpec={currentLevelSpec}
+              nextLevelSpec={nextLevelSpec}
+              seasonLabel={seasonLabel}
+              isTreasuryShaking={isTreasuryShaking}
+              region9x9Unlocked={region9x9Unlocked}
+              heatmapMode={heatmapMode}
+              advisorBriefing={advisorBriefing}
+              advisorHudOpen={advisorHudOpen}
+              graphicQuality={graphicQuality}
+              isMuted={isMuted}
+              stopHudPropagation={stopHudPropagation}
+              onSwitchSeason={handleSwitchSeason}
+              onOpenRegionMap={() => setRegionMapOpen(true)}
+              onLockedRegionClick={() => {
+                setGameState((prev) => ({
+                  ...prev,
+                  lastEventBanner: `🔒 ${getPolicyUnlockRequirementLabel('region_9x9')}`,
+                }));
               }}
-              className="top-bar hud-container pointer-events-auto max-w-full flex flex-wrap items-center justify-start gap-1.5 text-xs rounded-lg border border-amber-500/35 bg-[#0d1722]/94 px-1.5 py-1 shadow-xl"
-            >
-              <div className="pr-1.5 border-r border-slate-700/80 shrink-0">
-                <div className="flex items-center gap-1">
-                  <span
-                    data-testid="hud-city-level"
-                    title={
-                      nextLevelSpec
-                        ? `${getRegionName(
-                            gameState.activeRegion.rx,
-                            gameState.activeRegion.rz
-                          )} — Cấp hiện tại: Level ${currentLevelSpec.level} (${currentLevelSpec.title}). Lên Level ${nextLevelSpec.level} khi đạt ${nextLevelSpec.minPopulation} dân (${nextLevelSpec.unlockSummary})`
-                        : `${getRegionName(
-                            gameState.activeRegion.rx,
-                            gameState.activeRegion.rz
-                          )} — Đã đạt cấp tối đa: Level 5 (${currentLevelSpec.title})`
-                    }
-                    className="rounded bg-amber-400/20 border border-amber-400/60 px-1 py-0 text-[8px] leading-tight font-mono font-extrabold text-amber-200 whitespace-nowrap"
-                  >
-                    Lv.{gameState.cityLevel} {currentLevelSpec.title}
-                  </span>
-                </div>
-                <div
-                  data-testid="hud-date"
-                  title="Chu kỳ 3 mùa: Mùa Khô · Mùa Mưa Bão · Đỉnh Triều Cường (Bấm vào tên mùa để chuyển thử nghiệm)"
-                  className="text-[10px] leading-tight font-mono tabular-nums font-bold text-slate-100 whitespace-nowrap flex items-center gap-1 mt-0.5"
-                >
-                  <span>
-                    N{gameState.day}/30·T{gameState.month}/{gameState.year}
-                  </span>
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    data-testid="hud-season-badge"
-                    title="Chu kỳ 3 mùa: Mùa Khô · Mùa Mưa Bão · Đỉnh Triều Cường"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.currentTarget.blur();
-                      const nextSeason: SeasonType =
-                        gameState.season === 'dry'
-                          ? 'monsoon'
-                          : gameState.season === 'monsoon'
-                          ? 'high_tide'
-                          : 'dry';
-                      handleSwitchSeason(nextSeason);
-                    }}
-                    className="rounded bg-cyan-500/20 border border-cyan-400/40 px-1 py-0 text-[9px] leading-tight font-bold text-cyan-200 hover:bg-cyan-500/30 cursor-pointer"
-                  >
-                    {seasonLabel}
-                  </button>
-                </div>
-              </div>
+              onToggleHeatmap={() =>
+                setHeatmapMode((prev) =>
+                  prev === 'land_value' ? 'none' : 'land_value'
+                )
+              }
+              onCycleDayTickInterval={() => {
+                const cur = gameState.dayTickIntervalMs || 6000;
+                const nextMs = cur === 6000 ? 5000 : cur === 5000 ? 8000 : 6000;
+                handleChangeDayTickInterval(nextMs);
+              }}
+              onOpenSettlementModal={handleOpenSettlementModal}
+              onToggleAdvisorHud={handleToggleAdvisorHud}
+              onToggleGraphicQuality={handleToggleGraphicQuality}
+              onOpenHowToPlay={() => setHowToPlayOpen(true)}
+              onAdvanceDayManual={handleAdvanceDayManual}
+              onAdvanceMonthManual={handleAdvanceMonthManual}
+              onResetCamera={() => setCameraPresetTrigger((c) => c + 1)}
+              onToggleMute={handleToggleMute}
+              onTogglePause={handleTogglePause}
+            />
 
+            <div className="w-full flex items-start justify-between gap-2 pointer-events-none">
+              {/* Widget Nhiệm Vụ Tân Thủ 5 Bước (Onboarding Quests) — Nằm trong luồng flex ngay dưới Top HUD nên KHÔNG BAO GIỜ đè lên Top Bar */}
+              {!contextMenu && !activePolicyDrawer ? (
+                <aside
+                  data-testid="onboarding-quest-widget"
+                  data-collapsed={onboardingCollapsed ? 'true' : 'false'}
+                  onMouseMove={stopHudPropagation}
+                  onMouseOver={stopHudPropagation}
+                  onClick={stopHudPropagation}
+                  onPointerDown={stopHudPropagation}
+                  onPointerMove={stopHudPropagation}
+                  onPointerUp={stopHudPropagation}
+                  className={`z-[1002] hud-container pointer-events-auto rounded-xl border border-amber-400/55 bg-[#0b1520]/94 text-slate-100 shadow-2xl ${
+                    onboardingCollapsed
+                      ? 'w-auto max-w-[calc(100vw-16px)] px-2 py-1'
+                      : 'w-[276px] max-w-[calc(100vw-16px)] p-2.5'
+                  }`}
+                >
               <div
-                data-testid="hud-treasury-card"
-                className={`rounded-md px-0.5 py-0.5 transition-colors shrink-0 ${
-                  isTreasuryShaking
-                    ? 'hud-budget-shake bg-rose-500/25 border border-rose-400/70'
-                    : ''
+                className={`flex items-center justify-between gap-2 ${
+                  onboardingCollapsed
+                    ? ''
+                    : 'border-b border-slate-700/80 pb-1.5'
                 }`}
               >
-                <div className="text-[8px] leading-tight font-bold uppercase tracking-tight text-slate-400 whitespace-nowrap">
-                  Ngân Sách ({gameState.metrics.netBalance >= 0 ? '+' : ''}
-                  {Number(gameState.metrics.netBalance.toFixed(2))}B/th)
-                </div>
-                <div
-                  data-testid="hud-treasury"
-                  className={`hero-numeral text-xs leading-tight font-extrabold whitespace-nowrap ${
-                    gameState.treasury < 0 ? 'text-rose-400' : 'text-amber-300'
-                  }`}
-                >
-                  {formatVnd(gameState.treasury, true)}
-                </div>
-              </div>
-
-              <div className="shrink-0">
-                <div className="text-[8px] leading-tight font-bold uppercase tracking-tight text-slate-400 whitespace-nowrap">
-                  Dân / Chỗ Ở
-                </div>
-                <div
-                  data-testid="hud-population"
-                  className="hero-numeral text-xs leading-tight font-extrabold text-emerald-300 whitespace-nowrap"
-                >
-                  {gameState.metrics.population.toLocaleString('vi-VN')}/
-                  {gameState.metrics.housingCapacity.toLocaleString('vi-VN')}
-                </div>
-              </div>
-
-              <div className="shrink-0">
-                <div className="text-[8px] leading-tight font-bold uppercase tracking-tight text-slate-400 whitespace-nowrap">
-                  Việc Làm
-                </div>
-                <div
-                  data-testid="hud-jobs"
-                  className="hero-numeral text-xs leading-tight font-extrabold text-cyan-300 whitespace-nowrap"
-                >
-                  {gameState.metrics.labor.totalEmployed}/
-                  {gameState.metrics.labor.totalJobSlots}
-                </div>
-              </div>
-
-              <div className="shrink-0">
-                <div className="text-[8px] leading-tight font-bold uppercase tracking-tight text-slate-400 whitespace-nowrap">
-                  PCI · Tốc Độ
-                </div>
-                <div
-                  data-testid="hud-pci"
-                  className="hero-numeral text-xs leading-tight font-extrabold text-sky-300 whitespace-nowrap"
-                >
-                  {Math.round(gameState.metrics.pci)}/100·
-                  {Math.round(gameState.metrics.trafficSpeedIndex)}%
-                </div>
-              </div>
-
-              <div className="shrink-0">
-                <div className="text-[8px] leading-tight font-bold uppercase tracking-tight text-slate-400 whitespace-nowrap">
-                  Hạnh Phúc · AS
-                </div>
-                <div
-                  data-testid="hud-happiness-stability"
-                  className={`hero-numeral text-xs leading-tight font-extrabold whitespace-nowrap ${
-                    gameState.isCrisis ||
-                    gameState.metrics.happiness < 35 ||
-                    gameState.metrics.socialStability < 25
-                      ? 'text-rose-400'
-                      : 'text-amber-200'
-                  }`}
-                >
-                  {Math.round(gameState.metrics.happiness)}%·
-                  {Math.round(gameState.metrics.socialStability)}%
-                </div>
-              </div>
-
-              {gameState.isCrisis && (
-                <div
-                  data-testid="hud-crisis-status"
-                  className="rounded-md border border-rose-400 bg-rose-500/25 px-1.5 py-0.5 text-rose-100 shrink-0"
-                >
-                  <div className="text-[8px] leading-tight font-extrabold uppercase tracking-tight text-rose-300 whitespace-nowrap">
-                    Khủng Hoảng ({gameState.crisisTimer}T)
-                  </div>
-                  <div className="text-[9px] leading-tight font-mono font-bold whitespace-nowrap">
-                    PCI -{gameState.crisisMonthsElapsed * 5} · Di cư +
-                    {gameState.metrics.emigrationRatePercent}%
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Top-Right Cluster (.top-bar .hud-container): Gọn gàng 1 hàng ở 1280px, tự flex-wrap nếu hẹp hơn */}
-            <div
-              onMouseMove={stopHudPropagation}
-              onMouseOver={stopHudPropagation}
-              onClick={stopHudPropagation}
-              onPointerDown={stopHudPropagation}
-              onPointerMove={stopHudPropagation}
-              onPointerUp={stopHudPropagation}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                stopHudPropagation(e);
-              }}
-              className="top-bar hud-container pointer-events-auto ml-auto max-w-full flex flex-wrap items-center justify-end gap-1 rounded-lg border border-slate-700/80 bg-[#0d1722]/94 px-1.5 py-1 shadow-xl"
-            >
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="region-9x9-btn"
-                data-locked={!region9x9Unlocked ? 'true' : 'false'}
-                title={
-                  region9x9Unlocked
-                    ? 'Bản đồ Mở rộng Vùng Đô thị 9×9 [E]'
-                    : `🔒 ${getPolicyUnlockRequirementLabel('region_9x9')}`
-                }
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  if (!region9x9Unlocked) {
-                    soundEngine.playError();
-                    setGameState((prev) => ({
-                      ...prev,
-                      lastEventBanner: `🔒 ${getPolicyUnlockRequirementLabel('region_9x9')}`,
-                    }));
-                    return;
-                  }
-                  soundEngine.playClick();
-                  setRegionMapOpen(true);
-                }}
-                className={`px-1.5 py-0.5 rounded-md font-bold text-[11px] whitespace-nowrap shrink-0 border ${
-                  !region9x9Unlocked
-                    ? 'bg-slate-900/80 text-slate-400 border-slate-700 cursor-not-allowed'
-                    : gameState.metrics.canExpandRegion
-                    ? 'bg-amber-400 text-slate-950 border-white shadow-md cursor-pointer'
-                    : 'bg-[#152536] text-amber-300 border-amber-500/40 hover:bg-[#1c3148] cursor-pointer'
-                }`}
-              >
-                🗺 9×9 ({gameState.unlockedRegions.length}/81)
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="heatmap-land-value-btn"
-                title="Bật/Tắt Bản đồ nhiệt Giá đất [L]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  soundEngine.playClick();
-                  setHeatmapMode((prev) =>
-                    prev === 'land_value' ? 'none' : 'land_value'
-                  );
-                }}
-                className={`px-1.5 py-0.5 rounded-md font-bold text-[11px] whitespace-nowrap shrink-0 border cursor-pointer transition-colors ${
-                  heatmapMode === 'land_value'
-                    ? 'bg-orange-400 text-slate-950 border-white shadow-md'
-                    : 'bg-[#152536] text-orange-200 border-orange-400/45 hover:bg-[#1c3148]'
-                }`}
-              >
-                🗺 Giá đất [L]
-              </button>
-
-              {/* Nút xoay vòng nhịp độ thời gian: 6s → 5s → 8s → 6s */}
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-day-tick-selector"
-                title="Nhịp độ thời gian (Bấm để chuyển vòng: 6s/N → 5s/N → 8s/N)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  const cur = gameState.dayTickIntervalMs || 6000;
-                  const nextMs = cur === 6000 ? 5000 : cur === 5000 ? 8000 : 6000;
-                  handleChangeDayTickInterval(nextMs);
-                }}
-                className="px-1.5 py-0.5 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-amber-400/50 text-[11px] font-mono font-bold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                ⏱ {Math.round((gameState.dayTickIntervalMs || 6000) / 1000)}s/N
-              </button>
-
-              {/* Biểu tượng Thông báo Báo Cáo Quyết Toán Tài Chính kèm Chấm đỏ cảnh báo (!) */}
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="settlement-notification-btn"
-                title="Báo cáo Quyết toán Tài chính cuối tháng [B]"
-                aria-label="Thông báo Báo cáo Quyết toán Tài chính cuối tháng [B]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleOpenSettlementModal();
-                }}
-                className={`relative px-1.5 py-0.5 rounded-md border font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 transition-all ${
-                  gameState.hasUnreadSettlement
-                    ? 'bg-amber-500/30 hover:bg-amber-500/40 text-amber-100 border-amber-400 shadow-lg ring-1 ring-rose-400/80'
-                    : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border-amber-400/50'
-                }`}
-              >
-                <span>Báo Cáo [{gameState.globalLedger.length}]</span>
-                {gameState.hasUnreadSettlement && (
-                  <span
-                    data-testid="settlement-unread-badge"
-                    aria-label="Có báo cáo quyết toán cuối tháng mới"
-                    className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 border border-white text-[10px] leading-none font-extrabold text-white flex items-center justify-center shadow-md"
-                  >
-                    !
-                  </span>
-                )}
-              </button>
-
-              {/* Icon Trợ Lý Cố Vấn Kinh Tế trên HUD (Đồng bộ nhãn [C] với nút Ẩn [C]) */}
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-advisor-btn"
-                data-grade={advisorBriefing.healthGrade}
-                title={`Trợ Lý Cố Vấn Kinh Tế (Hạng ${advisorBriefing.healthGrade}) [C]`}
-                aria-label="Trợ Lý Cố Vấn Kinh Tế [C]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleToggleAdvisorHud();
-                }}
-                className={`relative px-1.5 py-0.5 rounded-md border font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 transition-all ${
-                  advisorHudOpen
-                    ? 'bg-emerald-400 text-slate-950 border-white shadow-md'
-                    : gameState.hasUnreadSettlement
-                    ? 'bg-emerald-500/30 hover:bg-emerald-500/40 text-emerald-100 border-emerald-400 shadow-lg'
-                    : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-400/50'
-                }`}
-              >
-                <span>Cố Vấn [C]</span>
-                {gameState.hasUnreadSettlement && !advisorHudOpen && (
-                  <span
-                    data-testid="advisor-unread-badge"
-                    className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 border border-white text-[10px] leading-none font-extrabold text-slate-950 flex items-center justify-center shadow-md"
-                  >
-                    {advisorBriefing.recommendations.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="graphic-quality-btn"
-                title="Chuyển đổi Chất lượng Đồ họa 3D: Tả thực (Water Shader, Bloom, Đèn phố PBR) hoặc Mượt (Tối ưu FPS)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleToggleGraphicQuality();
-                }}
-                className={`px-1.5 py-0.5 rounded-md border font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
-                  graphicQuality === 'high'
-                    ? 'bg-indigo-500/25 hover:bg-indigo-500/35 text-indigo-200 border-indigo-400/60'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-600'
-                }`}
-              >
-                {graphicQuality === 'high' ? '✨ Tả thực' : '⚡ Mượt'}
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-howtoplay-btn"
-                title="Hướng dẫn [?]"
-                aria-label="Hướng dẫn [?]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  soundEngine.playClick();
-                  setHowToPlayOpen(true);
-                }}
-                className="px-1.5 py-0.5 rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-400/50 font-extrabold text-[11px] cursor-pointer whitespace-nowrap shrink-0"
-              >
-                ?
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-advance-day-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleAdvanceDayManual();
-                }}
-                className="px-1.5 py-0.5 rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0"
-              >
-                +1 Ngày
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-advance-month-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleAdvanceMonthManual();
-                }}
-                className="px-1.5 py-0.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] cursor-pointer whitespace-nowrap shrink-0"
-              >
-                +1 Tháng
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                aria-label="Đặt lại góc nhìn Camera"
-                title="Đặt lại góc nhìn Camera"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  setCameraPresetTrigger((c) => c + 1);
-                }}
-                className="px-1.5 py-0.5 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer whitespace-nowrap"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
-                  <path d="M12 5V2L8 6l4 4V7c3.31 0 6 2.69 6 6 0 2.97-2.17 5.43-5 5.91v2.02c3.95-.49 7-3.85 7-7.93 0-4.42-3.58-8-8-8zm-6 8c0-1.65.67-3.15 1.76-4.24L6.34 7.34C4.9 8.79 4 10.79 4 13c0 4.08 3.05 7.44 7 7.93v-2.02c-2.83-.48-5-2.94-5-5.91z" />
-                </svg>
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-mute-btn"
-                aria-label={isMuted ? 'Bật âm thanh [M]' : 'Tắt âm thanh [M]'}
-                title={isMuted ? 'Bật âm thanh [M]' : 'Tắt âm thanh [M]'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleToggleMute();
-                }}
-                className="px-1.5 py-0.5 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer whitespace-nowrap"
-              >
-                {isMuted ? (
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current text-rose-400">
-                    <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current text-amber-300">
-                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
-                  </svg>
-                )}
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="hud-pause-btn"
-                aria-label="Tạm dừng [Space / P]"
-                title="Tạm dừng [Space / P]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.blur();
-                  handleTogglePause();
-                }}
-                className="px-1.5 py-0.5 shrink-0 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer whitespace-nowrap"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current">
-                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Widget Nhiệm Vụ Tân Thủ 5 Bước (Onboarding Quests) — Nằm gọn bên trái, tự ẩn khi mở BuildingContextMenu để không bao giờ đè lên Top Bar hay Bottom Dock */}
-          {!contextMenu && !activePolicyDrawer && (
-            <aside
-              data-testid="onboarding-quest-widget"
-              onMouseMove={stopHudPropagation}
-              onMouseOver={stopHudPropagation}
-              onClick={stopHudPropagation}
-              onPointerDown={stopHudPropagation}
-              onPointerMove={stopHudPropagation}
-              onPointerUp={stopHudPropagation}
-              className="fixed top-[56px] left-2 z-[1002] hud-container pointer-events-auto w-[276px] max-w-[calc(100vw-16px)] rounded-xl border border-amber-400/55 bg-[#0b1520]/94 p-2.5 text-slate-100 shadow-2xl"
-            >
-              <div className="flex items-center justify-between gap-1.5 border-b border-slate-700/80 pb-1.5">
                 <div className="min-w-0">
-                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300 truncate">
-                    Nhiệm Vụ Khởi Nghiệp ({gameState.completedQuests.length}/
+                  <div className="text-xs lg:text-[10px] font-extrabold uppercase tracking-wider text-amber-300 truncate">
+                    Nhiệm Vụ ({gameState.completedQuests.length}/
                     {ONBOARDING_QUESTS.length})
                   </div>
-                  <div className="text-[10px] text-slate-400 truncate">
-                    Lv.{gameState.cityLevel} {currentLevelSpec.title}
-                  </div>
+                  {!onboardingCollapsed && (
+                    <div className="text-xs lg:text-[10px] text-slate-400 truncate">
+                      Lv.{gameState.cityLevel} {currentLevelSpec.title}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
                   data-testid="onboarding-toggle-btn"
                   title="Thu gọn / Mở Nhiệm vụ [Q]"
                   onClick={() => setOnboardingCollapsed((c) => !c)}
-                  className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[10px] font-bold text-slate-200 cursor-pointer shrink-0"
+                  className="min-h-[40px] lg:min-h-0 px-2.5 lg:px-1.5 py-1 lg:py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs lg:text-[10px] font-bold text-slate-200 cursor-pointer shrink-0"
                 >
                   {onboardingCollapsed ? 'Mở [Q]' : 'Thu gọn [Q]'}
                 </button>
@@ -2004,22 +1408,24 @@ export default function App() {
                   )}
                 </div>
               )}
-            </aside>
-          )}
+              </aside>
+              ) : (
+                <div />
+              )}
 
-          {/* Bảng Trợ Lý Cố Vấn Kinh Tế tích hợp trực tiếp trên HUD (Tự động tạm ẩn khi mở MacroPolicyDrawer [T]/[G] để không bao giờ chồng lấn) */}
-          {advisorHudOpen && !activePolicyDrawer && (
-            <aside
-              data-testid="hud-advisor-panel"
-              onMouseMove={stopHudPropagation}
-              onMouseOver={stopHudPropagation}
-              onClick={stopHudPropagation}
-              onPointerDown={stopHudPropagation}
-              onPointerMove={stopHudPropagation}
-              onPointerUp={stopHudPropagation}
-              onWheel={(e) => e.stopPropagation()}
-              className="hud-container pointer-events-auto self-end mt-1 mb-14 w-full max-w-[350px] max-h-[46vh] overflow-y-auto custom-scrollbar rounded-xl border border-emerald-400/55 bg-[#0b1520]/95 p-2.5 text-slate-100 shadow-2xl toast-fade-in"
-            >
+              {/* Bảng Trợ Lý Cố Vấn Kinh Tế tích hợp trực tiếp trên HUD (Tự động tạm ẩn khi mở MacroPolicyDrawer [T]/[G] để không bao giờ chồng lấn) */}
+              {advisorHudOpen && !activePolicyDrawer && (
+                <aside
+                  data-testid="hud-advisor-panel"
+                  onMouseMove={stopHudPropagation}
+                  onMouseOver={stopHudPropagation}
+                  onClick={stopHudPropagation}
+                  onPointerDown={stopHudPropagation}
+                  onPointerMove={stopHudPropagation}
+                  onPointerUp={stopHudPropagation}
+                  onWheel={(e) => e.stopPropagation()}
+                  className="hud-container pointer-events-auto ml-auto w-full max-w-[350px] max-h-[46vh] overflow-y-auto custom-scrollbar rounded-xl border border-emerald-400/55 bg-[#0b1520]/95 p-2.5 text-slate-100 shadow-2xl toast-fade-in"
+                >
               <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-700/80">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className="w-6 h-6 rounded-lg bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 flex items-center justify-center shrink-0">
@@ -2166,8 +1572,10 @@ export default function App() {
                   ))}
                 </div>
               </div>
-            </aside>
-          )}
+                </aside>
+              )}
+            </div>
+          </div>
 
           {/* Macro Policy Drawer (nằm phía trên thanh Icon Dock khi được bật bằng [T] hoặc [G], giới hạn max-w-[calc(100vw-380px)] khi Cố vấn đang mở) */}
           <div
@@ -2189,564 +1597,44 @@ export default function App() {
             />
           </div>
 
-          {/* Xếp tầng Flex dọc (flex-col) chung cho Chú thích Heatmap [L], Hộp 5 chỉ số tài chính và Thanh tên công trình ngay phía trên Bottom Icon Dock:
-              - Chung 1 container flex-col items-center gap-1.5 nên KHÔNG BAO GIỜ đè lên nhau
-              - Tự động thu gọn & dịch vùng an toàn sang trái khi bảng Cố vấn (AdvisorHud) đang mở ở cạnh phải trên màn hình 1280x720 */}
-          {!activePolicyDrawer &&
-            (heatmapMode === 'land_value' ||
-              (!dockCollapsed &&
-                (hoveredDockTooltip || selectedToolFinancialPreview))) && (
-              <div
-                data-testid="bottom-hud-tooltip-stack"
-                className={`fixed bottom-[62px] z-[1045] pointer-events-none flex flex-col items-center gap-1.5 px-2 transition-all ${
-                  advisorHudOpen
-                    ? 'left-1/2 -translate-x-1/2 lg:left-[calc((100vw-370px)/2)] w-full max-w-[min(760px,92vw)] lg:max-w-[min(720px,calc(100vw-390px))]'
-                    : 'left-1/2 -translate-x-1/2 w-full max-w-[min(760px,92vw)]'
-                }`}
-              >
-                {/* Thanh Chú Thích Bản Đồ Nhiệt Giá Đất (xếp gọn trên cùng trong flex-col, không bao giờ đè lên hộp 5 chỉ số) */}
-                {heatmapMode === 'land_value' && (
-                  <div
-                    data-testid="land-value-heatmap-legend"
-                    onMouseMove={stopHudPropagation}
-                    onMouseOver={stopHudPropagation}
-                    onClick={stopHudPropagation}
-                    className="hud-container pointer-events-auto w-fit max-w-full rounded-lg border border-orange-400/60 bg-[#0b1520]/95 px-2.5 py-1 shadow-2xl flex flex-wrap items-center justify-center gap-2 text-[10px] text-slate-100"
-                  >
-                    <span className="font-extrabold text-orange-300 whitespace-nowrap">
-                      🗺 Giá đất [L]:
-                    </span>
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-slate-500 border border-slate-300/50" />
-                      &lt;1 Tỷ (Xám)
-                    </span>
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 border border-emerald-200/60" />
-                      1–5 Tỷ (Xanh)
-                    </span>
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-amber-400 border border-amber-100/60" />
-                      5–15 Tỷ (Vàng)
-                    </span>
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-orange-600 border border-orange-200/60" />
-                      &gt;15 Tỷ (Đỏ cam)
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="Tắt bản đồ nhiệt giá đất"
-                      onClick={() => {
-                        soundEngine.playClick();
-                        setHeatmapMode('none');
-                      }}
-                      className="ml-0.5 px-1 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold cursor-pointer"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-
-                {/* Tầng giữa: Hộp 5 chỉ số tài chính (1. Vốn | 2. Upkeep | 3. Nhân sự | 4. Kỳ vọng | 5. Hoàn vốn) */}
-                {!dockCollapsed &&
-                  (hoveredDockTooltip?.financialPreview ??
-                    selectedToolFinancialPreview) && (
-                  <div
-                    data-testid="build-financial-preview-bar"
-                    className="w-fit max-w-full rounded-xl border border-amber-400/60 bg-[#09131e]/96 px-3 py-1.5 shadow-2xl flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] font-mono"
-                  >
-                    {(() => {
-                      const fp =
-                        hoveredDockTooltip?.financialPreview ??
-                        selectedToolFinancialPreview!;
-                      return (
-                        <>
-                          <span className="whitespace-nowrap">
-                            <strong className="text-slate-400 font-sans">
-                              1. Vốn:
-                            </strong>{' '}
-                            <span className="text-amber-300 font-bold">
-                              {fp.costLabel}
-                            </span>
-                          </span>
-                          <span className="text-slate-700">|</span>
-                          <span className="whitespace-nowrap">
-                            <strong className="text-slate-400 font-sans">
-                              2. Upkeep:
-                            </strong>{' '}
-                            <span className="text-rose-300 font-bold">
-                              {fp.upkeepLabel}
-                            </span>
-                          </span>
-                          <span className="text-slate-700">|</span>
-                          <span className="whitespace-nowrap">
-                            <strong className="text-slate-400 font-sans">
-                              3. Nhân sự:
-                            </strong>{' '}
-                            <span className="text-sky-300 font-bold">
-                              {fp.workersLabel}
-                            </span>
-                          </span>
-                          <span className="text-slate-700">|</span>
-                          <span className="whitespace-nowrap">
-                            <strong className="text-slate-400 font-sans">
-                              4. Kỳ vọng:
-                            </strong>{' '}
-                            <span className="text-emerald-300 font-bold">
-                              {fp.expectedTaxOrOutputLabel}
-                            </span>
-                          </span>
-                          <span className="text-slate-700">|</span>
-                          <span className="whitespace-nowrap">
-                            <strong className="text-slate-400 font-sans">
-                              5. Hoàn vốn:
-                            </strong>{' '}
-                            <span className="text-cyan-300 font-bold">
-                              {fp.paybackLabel}
-                            </span>
-                          </span>
-                        </>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                {/* Tầng dưới: Thanh tên & trạng thái công trình (CC Cao Cấp... / Mở khóa ở Level...) */}
-                {hoveredDockTooltip && (
-                  <div
-                    data-testid="dock-active-tooltip"
-                    className="w-fit max-w-full rounded-lg border border-amber-400/75 bg-[#09121b]/96 px-3 py-1 shadow-2xl flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-center toast-fade-in"
-                  >
-                    <span className="text-xs font-extrabold text-amber-300 whitespace-nowrap">
-                      {hoveredDockTooltip.title}
-                    </span>
-                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-900 border border-amber-500/40 text-amber-200 whitespace-nowrap">
-                      [{hoveredDockTooltip.shortcut}]
-                    </span>
-                    {hoveredDockTooltip.meta && (
-                      <span
-                        className={`text-[11px] font-mono font-semibold ${
-                          hoveredDockTooltip.meta.includes('🔒')
-                            ? 'text-rose-300'
-                            : 'text-emerald-300'
-                        }`}
-                      >
-                        {hoveredDockTooltip.meta}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-          {/* MINIMALIST ICON HUD DOCK:
-              - Cố định tại bottom: 15px; left: 50%; transform: translateX(-50%);
-              - 1 hàng ngang duy nhất (display: flex; flex-wrap: nowrap;)
-              - Toàn bộ menu & công cụ là Icon SVG 36x36px nhỏ gọn, ẩn nhãn chữ trên bề mặt chính */}
-          {dockCollapsed ? (
-            <div
-              onMouseMove={stopHudPropagation}
-              onMouseOver={stopHudPropagation}
-              onClick={stopHudPropagation}
-              onPointerDown={stopHudPropagation}
-              onPointerMove={stopHudPropagation}
-              onPointerUp={stopHudPropagation}
-              className="bottom-dock hud-container pointer-events-auto rounded-xl border border-amber-500/40 bg-[#0d1722]/95 p-1 shadow-2xl"
-            >
-              <button
-                type="button"
-                data-testid="dock-expand-btn"
-                aria-label="Mở Bảng Quy Hoạch [H]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  soundEngine.playClick();
-                  setDockCollapsed(false);
-                }}
-                className="dock-icon-btn bg-amber-400/20 border border-amber-400 text-amber-300 cursor-pointer"
-              >
-                {renderMinimalistDockIcon('util_expand')}
-              </button>
-            </div>
-          ) : (
-            <div
-              data-testid="minimalist-bottom-dock"
-              onMouseMove={stopHudPropagation}
-              onMouseOver={stopHudPropagation}
-              onMouseLeave={() => setHoveredDockTooltip(null)}
-              onClick={stopHudPropagation}
-              onPointerDown={stopHudPropagation}
-              onPointerMove={stopHudPropagation}
-              onPointerUp={stopHudPropagation}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                stopHudPropagation(e);
-              }}
-              className="bottom-dock hud-container pointer-events-auto rounded-xl border border-amber-500/40 bg-[#0d1722]/95 px-2 py-1.5 shadow-2xl custom-scrollbar"
-            >
-              <div className="dock-icon-row">
-                {/* 1. Nhóm Icon Phân Loại Menu Chính (4 Icon 36x36px · F1-F4) */}
-                {categoryTabs.map((tab) => {
-                  const isActive = dockCategory === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      data-testid={`cat-btn-${tab.id}`}
-                      aria-label={`${tab.title} [${tab.shortcut}]`}
-                      title={`${tab.title} [${tab.shortcut}]`}
-                      onMouseEnter={() =>
-                        setHoveredDockTooltip({
-                          title: tab.title,
-                          shortcut: tab.shortcut,
-                        })
-                      }
-                      onFocus={() =>
-                        setHoveredDockTooltip({
-                          title: tab.title,
-                          shortcut: tab.shortcut,
-                        })
-                      }
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        soundEngine.playClick();
-                        setDockCategory(tab.id);
-                      }}
-                      className={`dock-icon-btn relative border cursor-pointer ${
-                        isActive
-                          ? 'bg-amber-400 text-slate-950 border-white shadow-md'
-                          : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white'
-                      }`}
-                    >
-                      {renderMinimalistDockIcon(tab.iconId)}
-                      <span
-                        data-testid={`cat-hotkey-badge-${tab.id}`}
-                        className="absolute -bottom-1 -right-1 rounded bg-slate-950/95 border border-slate-600 px-0.5 text-[7px] font-mono font-bold text-amber-300 leading-tight pointer-events-none"
-                      >
-                        {tab.tabKey}
-                      </span>
-                    </button>
-                  );
-                })}
-
-                <div className="h-5 w-[1px] bg-slate-700/90 mx-0.5 shrink-0" />
-
-                {/* 2. Nhóm Icon Công Trình Trong Phân Mục Đang Chọn (36x36px, ánh xạ tự động 1-9, 0 theo thứ tự trong Tab đang mở) */}
-                {filteredTools.map((tool, idx) => {
-                  const slotKey = idx === 9 ? '0' : String(idx + 1);
-                  const isSelected = gameState.selectedTool === tool.id;
-                  const unlocked = isToolUnlockedAtLevel(
-                    tool.id,
-                    gameState.cityLevel
-                  );
-                  const lockRequirement = !unlocked
-                    ? getToolUnlockRequirementLabel(tool.id)
-                    : null;
-                  const displayCost =
-                    tool.id === 'act_clearance'
-                      ? activeClearanceInfo?.canClear
-                        ? formatVnd(activeClearanceInfo.compensationCost)
-                        : '500k - Theo giá đất'
-                      : tool.id === 'act_reserve_land'
-                      ? '100% giá đất hiện tại'
-                      : tool.cost > 0
-                      ? formatVnd(tool.cost)
-                      : 'Miễn phí';
-
-                  const toolFinancialPreview =
-                    tool.id !== 'inspect' &&
-                    tool.id !== 'act_clearance' &&
-                    tool.id !== 'sub_drainage'
-                      ? getBuildingFinancialPreview(
-                          tool.id,
-                          gameState.policies,
-                          gameState.difficulty
-                        )
-                      : undefined;
-
-                  return (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      data-testid={`tool-btn-${tool.id}`}
-                      data-slot-key={slotKey}
-                      data-locked={!unlocked ? 'true' : 'false'}
-                      aria-label={`${tool.shortName} [${slotKey}]`}
-                      title={`${tool.shortName} [${slotKey}]`}
-                      onMouseEnter={() =>
-                        setHoveredDockTooltip({
-                          title: tool.shortName,
-                          shortcut: slotKey,
-                          meta: unlocked
-                            ? `${displayCost} · ${tool.constructionDays}N`
-                            : `🔒 ${lockRequirement}`,
-                          financialPreview: toolFinancialPreview,
-                        })
-                      }
-                      onFocus={() =>
-                        setHoveredDockTooltip({
-                          title: tool.shortName,
-                          shortcut: slotKey,
-                          meta: unlocked
-                            ? `${displayCost} · ${tool.constructionDays}N`
-                            : `🔒 ${lockRequirement}`,
-                          financialPreview: toolFinancialPreview,
-                        })
-                      }
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!unlocked) {
-                          soundEngine.playError();
-                          setGameState((prev) => ({
-                            ...prev,
-                            lastEventBanner: `🔒 ${lockRequirement}`,
-                          }));
-                          return;
-                        }
-                        soundEngine.playClick();
-                        setGameState((prev) => ({
-                          ...prev,
-                          selectedTool: tool.id as ToolId,
-                        }));
-                      }}
-                      className={`dock-icon-btn relative border ${
-                        !unlocked
-                          ? 'bg-slate-900/75 border-slate-800 text-slate-500 cursor-not-allowed opacity-65'
-                          : isSelected
-                          ? 'bg-amber-400/25 border-amber-400 text-amber-200 shadow-md ring-1 ring-amber-300/60 cursor-pointer'
-                          : 'bg-[#142230] border-slate-700/80 text-slate-200 hover:border-amber-400/60 hover:text-amber-200 cursor-pointer'
-                      }`}
-                    >
-                      {renderMinimalistDockIcon(tool.id)}
-                      <span
-                        data-testid={`tool-hotkey-badge-${tool.id}`}
-                        className="absolute -bottom-1 -right-1 rounded bg-slate-950/95 border border-amber-500/50 px-0.5 text-[7px] font-mono font-extrabold text-amber-200 leading-tight pointer-events-none"
-                      >
-                        [{slotKey}]
-                      </span>
-                      {!unlocked && (
-                        <span
-                          data-testid={`tool-lock-badge-${tool.id}`}
-                          className="absolute -top-1 -right-1 rounded-full bg-slate-950 border border-amber-400/70 px-1 text-[8px] font-mono font-bold text-amber-300 leading-tight"
-                        >
-                          🔒
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-
-                <div className="h-5 w-[1px] bg-slate-700/90 mx-0.5 shrink-0" />
-
-                {/* 3. Nhóm Icon Điều Hành Vĩ Mô & Sổ Cái (Thuế [T], Giao Thông & Lương Thực [G], Sổ Cái Quyết Toán [B], Cố Vấn [C], Khảo Sát [ESC], Thu Gọn [H]) */}
-                <button
-                  type="button"
-                  data-testid="policy-economy-btn"
-                  aria-label="Kinh Tế & Thuế [T]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Kinh Tế & Thuế',
-                      shortcut: 'T',
-                      meta: 'PIT · CIT · An Sinh',
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    soundEngine.playClick();
-                    setActivePolicyDrawer((prev) =>
-                      prev === 'economy' ? null : 'economy'
-                    );
-                  }}
-                  className={`dock-icon-btn border cursor-pointer ${
-                    activePolicyDrawer === 'economy'
-                      ? 'bg-cyan-400 text-slate-950 border-cyan-200 shadow-md'
-                      : 'bg-[#152536] text-cyan-300 border-cyan-500/40 hover:bg-[#1c3147]'
-                  }`}
-                >
-                  {renderMinimalistDockIcon('util_economy')}
-                </button>
-
-                <button
-                  type="button"
-                  data-testid="policy-traffic-btn"
-                  aria-label="Giao Thông & Lương Thực [G]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Giao Thông & Lương Thực',
-                      shortcut: 'G',
-                      meta: 'Metro · Kinh tế vỉa hè · An ninh lương thực',
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    soundEngine.playClick();
-                    setActivePolicyDrawer((prev) =>
-                      prev === 'traffic' ? null : 'traffic'
-                    );
-                  }}
-                  className={`dock-icon-btn border cursor-pointer ${
-                    activePolicyDrawer === 'traffic'
-                      ? 'bg-emerald-400 text-slate-950 border-emerald-200 shadow-md'
-                      : 'bg-[#152536] text-emerald-300 border-emerald-500/40 hover:bg-[#1c3147]'
-                  }`}
-                >
-                  {renderMinimalistDockIcon('util_traffic')}
-                </button>
-
-                <button
-                  type="button"
-                  data-testid="dock-bank-btn"
-                  aria-label="Ngân Hàng Đô Thị [K]"
-                  title="Ngân Hàng Đô Thị — Vay vốn & Gửi tiết kiệm [K]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Ngân Hàng Đô Thị',
-                      shortcut: 'K',
-                      meta: isPolicyUnlockedAtLevel('bank', gameState.cityLevel)
-                        ? `${(gameState.loans ?? []).length} khoản vay · ${(gameState.deposits ?? []).length} sổ TK`
-                        : '🔒 Mở khóa ở Level 2 (150 dân)',
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    soundEngine.playClick();
-                    setBankModalOpen((v) => !v);
-                  }}
-                  className={`dock-icon-btn relative border cursor-pointer ${
-                    bankModalOpen
-                      ? 'bg-sky-400 text-slate-950 border-white shadow-md'
-                      : 'bg-[#152536] text-sky-300 border-sky-500/40 hover:bg-[#1c3147]'
-                  }`}
-                >
-                  {renderMinimalistDockIcon('util_bank')}
-                  {!isPolicyUnlockedAtLevel('bank', gameState.cityLevel) && (
-                    <span className="absolute -top-1 -right-1 rounded-full bg-slate-950 border border-amber-400/70 px-1 text-[8px] font-mono font-bold text-amber-300 leading-tight">
-                      🔒
-                    </span>
-                  )}
-                  {isPolicyUnlockedAtLevel('bank', gameState.cityLevel) &&
-                    ((gameState.loans ?? []).length > 0 ||
-                      (gameState.deposits ?? []).length > 0) && (
-                      <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 rounded-full bg-sky-500 border border-white text-[8px] font-extrabold text-slate-950 flex items-center justify-center">
-                        {(gameState.loans ?? []).length +
-                          (gameState.deposits ?? []).length}
-                      </span>
-                    )}
-                </button>
-
-                <button
-                  type="button"
-                  data-testid="open-settlement-dock-btn"
-                  aria-label="Báo Cáo Quyết Toán & Sổ Cái [B]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Quyết Toán Cuối Tháng & Sổ Cái',
-                      shortcut: 'B',
-                      meta: `${gameState.globalLedger.length} bút toán`,
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (settlementModalOpen) {
-                      handleCloseSettlementModal();
-                    } else {
-                      handleOpenSettlementModal();
-                    }
-                  }}
-                  className={`dock-icon-btn border cursor-pointer ${
-                    settlementModalOpen
-                      ? 'bg-amber-400 text-slate-950 border-white shadow-md'
-                      : 'bg-[#152536] text-amber-300 border-amber-500/40 hover:bg-[#1c3147]'
-                  }`}
-                >
-                  {renderMinimalistDockIcon('util_ledger')}
-                  {gameState.hasUnreadSettlement && (
-                    <span
-                      data-testid="dock-settlement-unread-badge"
-                      className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-rose-600 border border-white text-[9px] font-extrabold text-white flex items-center justify-center"
-                    >
-                      !
-                    </span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  data-testid="dock-advisor-btn"
-                  aria-label="Trợ Lý Cố Vấn Kinh Tế [C]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Trợ Lý Cố Vấn Kinh Tế',
-                      shortcut: 'C',
-                      meta: `Hạng ${advisorBriefing.healthGrade} · ${advisorBriefing.recommendations.length} gợi ý`,
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggleAdvisorHud();
-                  }}
-                  className={`dock-icon-btn border cursor-pointer ${
-                    advisorHudOpen
-                      ? 'bg-emerald-400 text-slate-950 border-white shadow-md'
-                      : 'bg-[#152536] text-emerald-300 border-emerald-500/40 hover:bg-[#1c3147]'
-                  }`}
-                >
-                  {renderMinimalistDockIcon('util_advisor')}
-                  {gameState.hasUnreadSettlement && !advisorHudOpen && (
-                    <span
-                      data-testid="dock-advisor-unread-badge"
-                      className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border border-white text-[9px] font-extrabold text-slate-950 flex items-center justify-center"
-                    >
-                      {advisorBriefing.recommendations.length}
-                    </span>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  data-testid="release-tool-btn"
-                  aria-label="Khảo Sát / Hủy Ghost [ESC · Shift]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Khảo Sát / Hủy Ghost',
-                      shortcut: 'ESC · Shift',
-                      meta: 'Lia bản đồ tự do',
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleReleaseToolToFreePan();
-                  }}
-                  className={`dock-icon-btn border cursor-pointer ${
-                    gameState.selectedTool === 'inspect'
-                      ? 'bg-amber-300 text-slate-950 border-white shadow-md'
-                      : 'bg-slate-800/90 text-amber-200 border-amber-400/40 hover:bg-slate-700'
-                  }`}
-                >
-                  {renderMinimalistDockIcon('util_inspect')}
-                </button>
-
-                <button
-                  type="button"
-                  data-testid="dock-collapse-btn"
-                  aria-label="Thu Gọn HUD [H]"
-                  onMouseEnter={() =>
-                    setHoveredDockTooltip({
-                      title: 'Thu Gọn Thanh HUD',
-                      shortcut: 'H',
-                    })
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    soundEngine.playClick();
-                    setHoveredDockTooltip(null);
-                    setDockCollapsed(true);
-                  }}
-                  className="dock-icon-btn border border-slate-700 bg-slate-800/90 text-slate-300 hover:bg-slate-700 hover:text-white cursor-pointer"
-                >
-                  {renderMinimalistDockIcon('util_collapse')}
-                </button>
-              </div>
-            </div>
-          )}
+          <BottomBuildDock
+            gameState={gameState}
+            dockCategory={dockCategory}
+            setDockCategory={setDockCategory}
+            dockCollapsed={dockCollapsed}
+            setDockCollapsed={setDockCollapsed}
+            activePolicyDrawer={activePolicyDrawer}
+            setActivePolicyDrawer={setActivePolicyDrawer}
+            heatmapMode={heatmapMode}
+            setHeatmapMode={setHeatmapMode}
+            advisorHudOpen={advisorHudOpen}
+            advisorBriefing={advisorBriefing}
+            bankModalOpen={bankModalOpen}
+            setBankModalOpen={setBankModalOpen}
+            settlementModalOpen={settlementModalOpen}
+            hoveredDockTooltip={hoveredDockTooltip}
+            setHoveredDockTooltip={setHoveredDockTooltip}
+            selectedToolFinancialPreview={selectedToolFinancialPreview}
+            activeClearanceInfo={activeClearanceInfo}
+            isTouchDevice={isTouchDevice || isCompactViewport}
+            stopHudPropagation={stopHudPropagation}
+            onSelectTool={(toolId) =>
+              setGameState((prev) => ({
+                ...prev,
+                selectedTool: toolId,
+              }))
+            }
+            onLockedToolClick={(lockMessage) =>
+              setGameState((prev) => ({
+                ...prev,
+                lastEventBanner: lockMessage,
+              }))
+            }
+            onOpenSettlementModal={handleOpenSettlementModal}
+            onCloseSettlementModal={handleCloseSettlementModal}
+            onToggleAdvisorHud={handleToggleAdvisorHud}
+            onReleaseToolToFreePan={handleReleaseToolToFreePan}
+          />
         </div>
       )}
 

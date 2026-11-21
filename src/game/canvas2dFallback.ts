@@ -38,6 +38,7 @@ interface FallbackMountParams {
   ) => void;
   setResetCamera: (fn: () => void) => void;
   setSyncToolGhost?: (fn: (tool: ToolId) => void) => void;
+  getHeatmapMode?: () => 'none' | 'land_value';
 }
 
 const TILE_COLORS: Record<TileType, { base: string; roof: string; height: number }> = {
@@ -82,6 +83,7 @@ export function mountIsometricCanvasFallback({
   setTriggerJuice,
   setResetCamera,
   setSyncToolGhost,
+  getHeatmapMode,
 }: FallbackMountParams): () => void {
   const canvas = document.createElement('canvas');
   canvas.dataset.testid = 'city-3d-canvas';
@@ -628,16 +630,31 @@ export function mountIsometricCanvasFallback({
           const tile = state.grid[z]?.[x];
           if (!tile) continue;
           const style = TILE_COLORS[tile.type] ?? TILE_COLORS.empty_land;
+          const activeHeatmap = getHeatmapMode ? getHeatmapMode() : 'none';
           const isRoad = isRoadTile(tile.type);
-          const groundBase = isBuiltStructure(tile.type) && !isRoad
-            ? '#335c45'
-            : style.base;
+          let groundBase =
+            isBuiltStructure(tile.type) && !isRoad ? '#335c45' : style.base;
+          if (activeHeatmap === 'land_value' && tile.type !== 'river_water') {
+            const lv = tile.landValue;
+            groundBase =
+              lv > 15
+                ? '#ea580c'
+                : lv >= 5
+                ? '#f59e0b'
+                : lv >= 1
+                ? '#10b981'
+                : '#64748b';
+          }
           const naturalSeedHeight =
             tile.type === 'empty_land' && (x * 31 + z * 17) % 11 <= 5
               ? 6
               : tile.type === 'lowland_marsh' && (x * 19 + z * 23) % 7 <= 3
               ? 3
               : 0;
+          const tileStroke =
+            tile.isReservedPublicLand && tile.type !== 'river_water'
+              ? '#06b6d4'
+              : 'rgba(15, 23, 42, 0.45)';
 
           drawTilePrism(
             x,
@@ -649,7 +666,8 @@ export function mountIsometricCanvasFallback({
               : Math.max(
                   naturalSeedHeight,
                   style.height * (tile.constructionRemainingDays > 0 ? 0.45 : 1)
-                )
+                ),
+            tileStroke
           );
 
           // Vẽ vạch kẻ làn đường kết nối cho ô đường bộ

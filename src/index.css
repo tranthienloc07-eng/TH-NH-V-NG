@@ -150,20 +150,23 @@
    Cố định thanh HUD dưới cùng tại bottom: 15px; left: 50%; transform: translateX(-50%);
    Chừa lại tối thiểu > 85% không gian thoáng cho bản đồ 3D Three.js */
 .top-bar {
-  min-height: 38px;
+  min-height: 44px;
 }
 
 .bottom-dock {
   position: fixed;
-  bottom: 15px;
+  bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
-  max-height: 11vh;
+  max-height: 76px;
   max-width: calc(100vw - 16px);
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
 }
 
 .dock-icon-row {
@@ -176,10 +179,10 @@
 
 .dock-icon-btn {
   position: relative;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -187,6 +190,25 @@
   border-radius: 8px;
   transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
     background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+@media (min-width: 1024px) {
+  .top-bar {
+    min-height: 38px;
+  }
+
+  .bottom-dock {
+    bottom: 15px;
+    max-height: 11vh;
+    overflow-x: visible;
+  }
+
+  .dock-icon-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
 }
 
 .dock-icon-btn:hover {
@@ -216,16 +238,11 @@
   transform: translate3d(-50%, 0, 0) scale(1);
 }
 
-@media (max-width: 639px) {
+@media (max-width: 1023px) {
   .top-bar {
-    max-height: 68px;
-  }
-
-  .bottom-dock {
-    bottom: 12px;
-    max-height: 11vh;
     overflow-x: auto;
-    overflow-y: visible;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
   .info-panel-scroll {

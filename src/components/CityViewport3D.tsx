@@ -2,10 +2,6 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { Water } from 'three/examples/jsm/objects/Water.js';
 import { mountIsometricCanvasFallback } from '../game/canvas2dFallback';
 import {
   buildTileStructureGroup,
@@ -207,63 +203,13 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     const container = mountRef.current;
     if (!container) return;
 
-    let createdRenderer: THREE.WebGLRenderer | null = null;
-    let isSoftwareGl = false;
-
-    const rendererAttempts: THREE.WebGLRendererParameters[] = [
-      {
-        alpha: false,
-        antialias: true,
-        powerPreference: 'high-performance',
-      },
-      {
-        alpha: false,
-        antialias: false,
-        powerPreference: 'default',
-      },
-      {
-        antialias: false,
-        failIfMajorPerformanceCaveat: false,
-      },
-    ];
-
-    for (const params of rendererAttempts) {
-      if (createdRenderer) break;
-      try {
-        const candidateCanvas = document.createElement('canvas');
-        createdRenderer = new THREE.WebGLRenderer({
-          ...params,
-          canvas: candidateCanvas,
-        });
-      } catch {
-        createdRenderer = null;
-      }
-    }
-
-    if (createdRenderer) {
-      try {
-        const gl = createdRenderer.getContext();
-        const ext = gl.getExtension('WEBGL_debug_renderer_info');
-        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-        const gpu = String(gl.getParameter(param) ?? '');
-        isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(
-          gpu
-        );
-      } catch {
-        isSoftwareGl = false;
-      }
-    }
-
-    if (onDetectSoftwareGlRef.current) {
-      onDetectSoftwareGlRef.current(isSoftwareGl);
-    }
-
-    if (!createdRenderer) {
+    const mountFallback = (): (() => void) => {
       container.dataset.rendererMode = 'canvas-3d-fallback';
       container.dataset.graphicQuality = graphicQualityRef.current;
       return mountIsometricCanvasFallback({
         container,
         getState: () => stateRef.current,
+        getHeatmapMode: () => heatmapModeRef.current,
         onTileClick: (x, z) => onTileClickRef.current(x, z),
         onTileRightClick: (x, z, cx, cy) =>
           onTileRightClickRef.current(x, z, cx, cy),
@@ -281,26 +227,161 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
           syncToolGhostRef.current = fn;
         },
       });
+    };
+
+    // Tiền kiểm tra và khởi tạo WebGL context trực tiếp TRƯỚC khi gọi new THREE.WebGLRenderer
+    // để nếu trình duyệt chặn WebGL (context loss blocklist / không hỗ trợ GPU), không bao giờ
+    // phát sinh console.error từ constructor của Three.js và chuyển mượt sang chế độ 2D Isometric.
+    let createdRenderer: THREE.WebGLRenderer | null = null;
+    let isSoftwareGl = false;
+
+    const contextAttempts: {
+      contextType: 'webgl2' | 'webgl';
+      attrs: WebGLContextAttributes;
+    }[] = [
+      {
+        contextType: 'webgl2',
+        attrs: {
+          alpha: false,
+          antialias: true,
+          powerPreference: 'high-performance',
+          failIfMajorPerformanceCaveat: false,
+        },
+      },
+      {
+        contextType: 'webgl2',
+        attrs: {
+          alpha: false,
+          antialias: false,
+          powerPreference: 'default',
+          failIfMajorPerformanceCaveat: false,
+        },
+      },
+      {
+        contextType: 'webgl',
+        attrs: {
+          alpha: false,
+          antialias: false,
+          powerPreference: 'default',
+          failIfMajorPerformanceCaveat: false,
+        },
+      },
+    ];
+
+    let acquiredCanvas: HTMLCanvasElement | null = null;
+    let acquiredContext: WebGLRenderingContext | WebGL2RenderingContext | null =
+      null;
+    let acquiredAntialias = false;
+    let acquiredPowerPref: WebGLPowerPreference = 'default';
+
+    for (const attempt of contextAttempts) {
+      let creationErrorMsg = '';
+      const candidateCanvas = document.createElement('canvas');
+      const onCreationError = (ev: Event) => {
+        ev.preventDefault();
+        const status = (ev as Event & { statusMessage?: string }).statusMessage;
+        if (typeof status === 'string') {
+          creationErrorMsg = status;
+        }
+      };
+      candidateCanvas.addEventListener(
+        'webglcontextcreationerror',
+        onCreationError,
+        false
+      );
+
+      let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
+      try {
+        gl = candidateCanvas.getContext(
+          attempt.contextType,
+          attempt.attrs
+        ) as WebGLRenderingContext | WebGL2RenderingContext | null;
+      } catch {
+        gl = null;
+      }
+
+      candidateCanvas.removeEventListener(
+        'webglcontextcreationerror',
+        onCreationError,
+        false
+      );
+
+      if (gl && !gl.isContextLost()) {
+        acquiredCanvas = candidateCanvas;
+        acquiredContext = gl;
+        acquiredAntialias = Boolean(attempt.attrs.antialias);
+        acquiredPowerPref = attempt.attrs.powerPreference ?? 'default';
+        break;
+      }
+
+      // Nếu trình duyệt đã chặn WebGL trên trang (vd: "context loss and was blocked"),
+      // dừng thử ngay lập tức và chuyển sang fallback sạch lỗi.
+      if (/blocked|context loss|disabled/i.test(creationErrorMsg)) {
+        break;
+      }
     }
+
+    if (acquiredCanvas && acquiredContext) {
+      try {
+        const ext = acquiredContext.getExtension('WEBGL_debug_renderer_info');
+        const param = ext
+          ? ext.UNMASKED_RENDERER_WEBGL
+          : acquiredContext.RENDERER;
+        const gpu = String(acquiredContext.getParameter(param) ?? '');
+        isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(
+          gpu
+        );
+      } catch {
+        isSoftwareGl = false;
+      }
+
+      try {
+        createdRenderer = new THREE.WebGLRenderer({
+          canvas: acquiredCanvas,
+          context: acquiredContext,
+          alpha: false,
+          antialias: acquiredAntialias,
+          powerPreference: acquiredPowerPref,
+        });
+      } catch {
+        createdRenderer = null;
+      }
+    }
+
+    if (onDetectSoftwareGlRef.current) {
+      onDetectSoftwareGlRef.current(isSoftwareGl);
+    }
+
+    if (!createdRenderer) {
+      return mountFallback();
+    }
+
+    const isTouch =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(pointer: coarse)').matches;
 
     container.dataset.rendererMode = 'webgl-3d';
     container.dataset.graphicQuality = graphicQualityRef.current;
     container.dataset.isSoftwareGl = isSoftwareGl ? 'true' : 'false';
+    container.dataset.isTouch = isTouch ? 'true' : 'false';
     const renderer = createdRenderer;
 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.12;
+    // Khóa pixelRatio = 1 trên thiết bị cảm ứng / đồ họa Mượt / Software GL; tối đa 1.5 trên Desktop Tả thực
+    const initialHighQuality = !isTouch && graphicQualityRef.current === 'high';
     renderer.setPixelRatio(
-      isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2)
+      isTouch || isSoftwareGl || graphicQualityRef.current === 'medium'
+        ? 1
+        : Math.min(window.devicePixelRatio, 1.5)
     );
-    renderer.shadowMap.enabled =
-      !isSoftwareGl && graphicQualityRef.current === 'high';
+    renderer.shadowMap.enabled = !isSoftwareGl && initialHighQuality;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const initialRect = container.getBoundingClientRect();
-    const initW = initialRect.width || window.innerWidth;
-    const initH = initialRect.height || window.innerHeight;
+    const initW = Math.min(2560, Math.max(1, initialRect.width || window.innerWidth));
+    const initH = Math.min(2560, Math.max(1, initialRect.height || window.innerHeight));
     renderer.setSize(initW, initH);
     renderer.domElement.dataset.testid = 'city-3d-canvas';
     renderer.domElement.style.touchAction = 'none';
@@ -331,16 +412,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
 
     container.appendChild(renderer.domElement);
 
-    const onWebglContextLost = (e: Event) => {
-      e.preventDefault();
-    };
-    renderer.domElement.addEventListener(
-      'webglcontextlost',
-      onWebglContextLost,
-      false
-    );
-
-    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+    const maxAnisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
 
     const scene = new THREE.Scene();
     const horizonColor = new THREE.Color(0x132232);
@@ -349,10 +421,10 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     scene.fog = sceneFog;
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmremGenerator.fromScene(
-      new RoomEnvironment(),
-      0.04
-    ).texture;
+    const roomEnv = new RoomEnvironment();
+    const envRenderTarget = pmremGenerator.fromScene(roomEnv, 0.04);
+    scene.environment = envRenderTarget.texture;
+    roomEnv.dispose();
     pmremGenerator.dispose();
 
     const camera = new THREE.PerspectiveCamera(42, initW / initH, 0.5, 280);
@@ -379,29 +451,13 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     const initCamScale = getDefaultCameraDistanceScale(initW, initH);
     camera.position.set(0, 36 * initCamScale, 44 * initCamScale);
 
-    // Post-Processing nhẹ (EffectComposer + RenderPass + UnrealBloomPass, chỉ bật khi graphicQuality === 'high' && !isSoftwareGl)
-    let composer: EffectComposer | null = null;
-    let bloomPass: UnrealBloomPass | null = null;
-    if (!isSoftwareGl) {
-      composer = new EffectComposer(renderer);
-      const renderPass = new RenderPass(scene, camera);
-      composer.addPass(renderPass);
-      bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(initW, initH),
-        0.35, // strength
-        0.4, // radius
-        0.78 // threshold
-      );
-      composer.addPass(bloomPass);
-    }
-
     const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x1e293b, 0.85);
     hemiLight.position.set(0, 50, 0);
     scene.add(hemiLight);
 
     const keyLight = new THREE.DirectionalLight(0xfff1d0, 1.85);
     keyLight.position.set(28, 46, 24);
-    keyLight.castShadow = !isSoftwareGl && graphicQualityRef.current === 'high';
+    keyLight.castShadow = !isSoftwareGl && initialHighQuality;
     const d = 36;
     keyLight.shadow.camera.left = -d;
     keyLight.shadow.camera.right = d;
@@ -636,26 +692,29 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       return geo;
     };
 
-    // Mặt nước Sông Phản chiếu (Water shader từ three/examples/jsm/objects/Water.js)
+    // Mặt nước Sông PBR phản chiếu 1-pass (dùng normalMap gợn sóng động + IBL RoomEnvironment)
+    // Không dùng multi-pass Water reflection FBO để tránh nhân đôi draw-calls gây quá tải GPU / context loss.
     // Giữ cao độ mặt nước bình thường ở y = -0.26 (thấp hơn mặt trên lowland_marsh y = -0.06 đúng 0.20 đơn vị >= 0.15)
-    // và chỉ dâng lên khi season === 'high_tide'
+    // và chỉ dâng lên khi season === 'high_tide'.
     const waterNormalTex = getWaterNormalTexture(maxAnisotropy);
+    waterNormalTex.repeat.set(1.5, 1.5);
     const initialWaterGeo = buildRiverWaterBufferGeometry(stateRef.current.grid);
-    const reflectiveWater = new Water(initialWaterGeo, {
-      textureWidth: isSoftwareGl ? 256 : 512,
-      textureHeight: isSoftwareGl ? 256 : 512,
-      waterNormals: waterNormalTex,
-      sunDirection: keyLight.position.clone().normalize(),
-      sunColor: 0xfff1d0,
-      waterColor: 0x0369a1,
-      distortionScale: 1.4,
-      fog: true,
+    const reflectiveWaterMat = new THREE.MeshStandardMaterial({
+      color: 0x0284c7,
+      emissive: 0x034569,
+      emissiveIntensity: 0.28,
+      roughness: 0.18,
+      metalness: 0.28,
+      normalMap: waterNormalTex,
+      normalScale: new THREE.Vector2(0.95, 0.95),
+      envMapIntensity: 1.1,
     });
+    const reflectiveWater = new THREE.Mesh(initialWaterGeo, reflectiveWaterMat);
     reflectiveWater.rotation.x = -Math.PI / 2;
     reflectiveWater.position.y =
-      stateRef.current.season === 'high_tide' ? -0.1 : -0.26;
-    reflectiveWater.receiveShadow = true;
-    reflectiveWater.visible = graphicQualityRef.current === 'high';
+      stateRef.current.season === 'high_tide' ? -0.09 : -0.24;
+    reflectiveWater.receiveShadow = !isTouch && !isSoftwareGl;
+    reflectiveWater.visible = initialHighQuality;
     scene.add(reflectiveWater);
 
     // 18x18 Interactive Grid Tiles
@@ -718,6 +777,68 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     let waterShips: ActiveWaterShip[] = [];
     let floodedWorldPositions: { x: number; z: number }[] = [];
 
+    // Dùng chung 8 Material nền cho toàn bộ 324 ô đất (giảm từ 324 xuống 8 material, chống tràn shader/VRAM)
+    const sharedTileMaterials = {
+      river: new THREE.MeshStandardMaterial({
+        color: 0x0ea5e9,
+        emissive: 0x0369a1,
+        emissiveIntensity: 0.28,
+        roughness: 0.32,
+        metalness: 0.12,
+        bumpMap: bumpTex,
+        bumpScale: 0.015,
+      }),
+      marsh: new THREE.MeshStandardMaterial({
+        color: 0x274e37,
+        roughness: 0.88,
+        metalness: 0.05,
+        bumpMap: bumpTex,
+        bumpScale: 0.02,
+      }),
+      landElev1: new THREE.MeshStandardMaterial({
+        color: 0x2f4f38,
+        roughness: 0.85,
+        metalness: 0.05,
+        bumpMap: bumpTex,
+        bumpScale: 0.02,
+      }),
+      landElev2: new THREE.MeshStandardMaterial({
+        color: 0x3b593f,
+        roughness: 0.85,
+        metalness: 0.05,
+        bumpMap: bumpTex,
+        bumpScale: 0.02,
+      }),
+      heatGray: new THREE.MeshStandardMaterial({
+        color: 0x64748b,
+        roughness: 0.72,
+        metalness: 0.08,
+        bumpMap: bumpTex,
+        bumpScale: 0.015,
+      }),
+      heatGreen: new THREE.MeshStandardMaterial({
+        color: 0x10b981,
+        roughness: 0.72,
+        metalness: 0.08,
+        bumpMap: bumpTex,
+        bumpScale: 0.015,
+      }),
+      heatAmber: new THREE.MeshStandardMaterial({
+        color: 0xf59e0b,
+        roughness: 0.72,
+        metalness: 0.08,
+        bumpMap: bumpTex,
+        bumpScale: 0.015,
+      }),
+      heatOrange: new THREE.MeshStandardMaterial({
+        color: 0xea580c,
+        roughness: 0.72,
+        metalness: 0.08,
+        bumpMap: bumpTex,
+        bumpScale: 0.015,
+      }),
+    };
+
     for (let z = 0; z < GRID_SIZE; z++) {
       tileBaseMeshes[z] = [];
       floodWaterMeshes[z] = [];
@@ -726,14 +847,7 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
         const wx = x * TILE_WORLD_SIZE - halfBoard + TILE_WORLD_SIZE / 2;
         const wz = z * TILE_WORLD_SIZE - halfBoard + TILE_WORLD_SIZE / 2;
 
-        const baseMat = new THREE.MeshStandardMaterial({
-          color: 0x2d4a36,
-          roughness: 0.85,
-          metalness: 0.05,
-          bumpMap: bumpTex,
-          bumpScale: 0.02,
-        });
-        const baseMesh = new THREE.Mesh(tileGeo, baseMat);
+        const baseMesh = new THREE.Mesh(tileGeo, sharedTileMaterials.landElev1);
         baseMesh.position.set(wx, -0.175, wz);
         baseMesh.receiveShadow = true;
         baseMesh.userData = { gridX: x, gridZ: z };
@@ -772,7 +886,12 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
 
     syncQualityRef.current = (q: GraphicQuality) => {
       container.dataset.graphicQuality = q;
-      const isHigh = q === 'high';
+      const isHigh = !isTouch && q === 'high';
+      renderer.setPixelRatio(
+        isTouch || isSoftwareGl || q === 'medium'
+          ? 1
+          : Math.min(window.devicePixelRatio, 1.5)
+      );
       reflectiveWater.visible = isHigh;
       renderer.shadowMap.enabled = !isSoftwareGl && isHigh;
       keyLight.castShadow = !isSoftwareGl && isHigh;
@@ -1415,9 +1534,9 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       let dirtyTileCount = 0;
       const nextFloodedPositions: { x: number; z: number }[] = [];
 
-      // Chỉ dâng mực nước sông khi season === 'high_tide'; bình thường giữ ở y = -0.26
-      // (thấp hơn mặt đất lowland_marsh y = -0.06 đúng 0.20 đơn vị >= 0.15)
-      const targetWaterY = season === 'high_tide' ? -0.1 : -0.26;
+      // Chỉ dâng mực nước sông khi season === 'high_tide'; bình thường giữ ở y = -0.24
+      // (cao hơn mặt trên đáy sông -0.26 đúng 0.02 tránh Z-fighting, vẫn thấp hơn lowland_marsh -0.06 đúng 0.18)
+      const targetWaterY = season === 'high_tide' ? -0.09 : -0.24;
       reflectiveWater.position.y = targetWaterY;
       container.dataset.waterSurfaceY = targetWaterY.toFixed(2);
 
@@ -1474,12 +1593,9 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
           dirtyTileCount += 1;
 
           const baseMesh = tileBaseMeshes[z][x];
-          const baseMat = baseMesh.material as THREE.MeshStandardMaterial;
 
           if (tile.type === 'river_water') {
-            baseMat.color.setHex(0x0369a1);
-            baseMat.roughness = 0.22;
-            baseMat.metalness = 0.55;
+            baseMesh.material = sharedTileMaterials.river;
             // Đáy/khối nước ở y = -0.435 (mặt trên = -0.26, khớp cao độ mặt nước bình thường)
             baseMesh.position.y = season === 'high_tide' ? -0.275 : -0.435;
           } else {
@@ -1492,25 +1608,21 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
             if (activeHeatmap === 'land_value') {
               // Bản đồ Nhiệt Giá Đất: <1 Tỷ Xám · 1–5 Tỷ Xanh · 5–15 Tỷ Vàng · >15 Tỷ Đỏ cam
               const lv = tile.landValue;
-              const heatmapHex =
+              baseMesh.material =
                 lv > 15
-                  ? 0xea580c
+                  ? sharedTileMaterials.heatOrange
                   : lv >= 5
-                  ? 0xf59e0b
+                  ? sharedTileMaterials.heatAmber
                   : lv >= 1
-                  ? 0x10b981
-                  : 0x64748b;
-              baseMat.color.setHex(heatmapHex);
-              baseMat.roughness = 0.72;
-              baseMat.metalness = 0.08;
+                  ? sharedTileMaterials.heatGreen
+                  : sharedTileMaterials.heatGray;
             } else if (tile.type === 'lowland_marsh') {
-              baseMat.color.setHex(0x274e37);
-              baseMat.roughness = 0.88;
-              baseMat.metalness = 0.05;
+              baseMesh.material = sharedTileMaterials.marsh;
             } else {
-              baseMat.color.setHex(tile.elevation === 2 ? 0x3b593f : 0x2f4f38);
-              baseMat.roughness = 0.85;
-              baseMat.metalness = 0.05;
+              baseMesh.material =
+                tile.elevation === 2
+                  ? sharedTileMaterials.landElev2
+                  : sharedTileMaterials.landElev1;
             }
           }
 
@@ -1688,19 +1800,26 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     const onPointerMove = (e: PointerEvent) => {
       if (stateRef.current.mode !== 'playing') return;
 
-      if (touchLongPressTimer !== null) {
-        const moveDist = Math.hypot(
-          e.clientX - pointerDownPos.x,
-          e.clientY - pointerDownPos.y
-        );
-        if (moveDist > 8) {
-          clearTouchLongPress();
+      if (e.pointerType === 'touch') {
+        if (touchLongPressTimer !== null) {
+          const moveDist = Math.hypot(
+            e.clientX - pointerDownPos.x,
+            e.clientY - pointerDownPos.y
+          );
+          if (moveDist > 8) {
+            clearTouchLongPress();
+          }
         }
-      }
-
-      if (e.buttons !== 0 && e.pointerType !== 'touch') {
         hoverReticle.visible = false;
         roadSnapPreviewGroup.visible = false;
+        container.dataset.hoverReticleVisible = 'false';
+        return;
+      }
+
+      if (e.buttons !== 0) {
+        hoverReticle.visible = false;
+        roadSnapPreviewGroup.visible = false;
+        container.dataset.hoverReticleVisible = 'false';
         if (previewMesh) {
           previewMesh.visible = false;
           syncGhostDataset();
@@ -1827,34 +1946,42 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     renderer.domElement.addEventListener('pointercancel', onPointerCancel);
     renderer.domElement.addEventListener('contextmenu', onContextMenu);
 
+    let frameId = 0;
+    let resizeRafId = 0;
+    let isDisposed = false;
+    let isContextLost = false;
+    let fallbackActive = false;
+    let fallbackCleanup: (() => void) | null = null;
+    let contextLostFallbackTimer: number | null = null;
+
     let lastWasPortrait = initW < initH;
     const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          camera.aspect = width / height;
-          camera.updateProjectionMatrix();
-          renderer.setSize(width, height);
-          if (composer) {
-            composer.setSize(width, height);
-          }
-          if (bloomPass) {
-            bloomPass.resolution.set(width, height);
-          }
-          const isPortrait = width < height;
-          if (isPortrait !== lastWasPortrait) {
-            lastWasPortrait = isPortrait;
-            const scale = getDefaultCameraDistanceScale(width, height);
-            camera.position.set(0, 36 * scale, 44 * scale);
-            controls.update();
-          }
+      if (isDisposed || isContextLost || fallbackActive) return;
+      const latest = entries[entries.length - 1];
+      if (!latest) return;
+      const rawW = latest.contentRect.width;
+      const rawH = latest.contentRect.height;
+      if (rawW <= 0 || rawH <= 0) return;
+
+      cancelAnimationFrame(resizeRafId);
+      resizeRafId = requestAnimationFrame(() => {
+        if (isDisposed || isContextLost || fallbackActive) return;
+        const width = Math.min(2560, Math.max(1, rawW));
+        const height = Math.min(2560, Math.max(1, rawH));
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+        const isPortrait = width < height;
+        if (isPortrait !== lastWasPortrait) {
+          lastWasPortrait = isPortrait;
+          const scale = getDefaultCameraDistanceScale(width, height);
+          camera.position.set(0, 36 * scale, 44 * scale);
+          controls.update();
         }
-      }
+      });
     });
     resizeObserver.observe(container);
 
-    let frameId = 0;
-    let isDisposed = false;
     const clock = new THREE.Clock();
     let titleOrbitAngle = 0.55;
     let ambienceUpdateAccumulator = 0;
@@ -1870,14 +1997,100 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     let shipWakeAccumulator = 0;
     let highTideFoamAccumulator = 0;
 
+    const clearContextLostTimer = () => {
+      if (contextLostFallbackTimer !== null) {
+        window.clearTimeout(contextLostFallbackTimer);
+        contextLostFallbackTimer = null;
+      }
+    };
+
+    const scheduleNextFrame = () => {
+      if (isDisposed || isContextLost || fallbackActive || document.hidden) {
+        return;
+      }
+      if (isSoftwareGl) {
+        afterDraw(tick);
+      } else {
+        frameId = requestAnimationFrame(tick);
+      }
+    };
+
+    const switchToCanvasFallbackAfterContextLoss = () => {
+      if (isDisposed || fallbackActive) return;
+      fallbackActive = true;
+      cancelAnimationFrame(frameId);
+      clearTimeout(frameId);
+      clearContextLostTimer();
+      resizeObserver.disconnect();
+      if (renderer.domElement.parentNode === container) {
+        container.removeChild(renderer.domElement);
+      }
+      fallbackCleanup = mountFallback();
+    };
+
+    const onWebglContextLost = (e: Event) => {
+      e.preventDefault();
+      isContextLost = true;
+      cancelAnimationFrame(frameId);
+      clearTimeout(frameId);
+      clearContextLostTimer();
+      // Nếu trình duyệt không tự khôi phục context trong 2.5s, chuyển mượt sang Canvas 2D Isometric
+      contextLostFallbackTimer = window.setTimeout(() => {
+        if (!isDisposed && isContextLost && !fallbackActive) {
+          switchToCanvasFallbackAfterContextLoss();
+        }
+      }, 2500);
+    };
+
+    const onWebglContextRestored = () => {
+      if (isDisposed || fallbackActive) return;
+      clearContextLostTimer();
+      isContextLost = false;
+      clock.getDelta();
+      scheduleNextFrame();
+    };
+
+    const onVisibilityChange = () => {
+      if (isDisposed || isContextLost || fallbackActive) return;
+      if (document.hidden) {
+        cancelAnimationFrame(frameId);
+        clearTimeout(frameId);
+      } else {
+        clock.getDelta();
+        scheduleNextFrame();
+      }
+    };
+
+    renderer.domElement.addEventListener(
+      'webglcontextlost',
+      onWebglContextLost,
+      false
+    );
+    renderer.domElement.addEventListener(
+      'webglcontextrestored',
+      onWebglContextRestored,
+      false
+    );
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     function afterDraw(cb: () => void) {
+      if (isDisposed || isContextLost || fallbackActive || document.hidden) {
+        return;
+      }
       const gl = renderer.getContext() as WebGL2RenderingContext;
+      if (!gl || gl.isContextLost()) {
+        return;
+      }
       const sync = gl.fenceSync
         ? gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
         : null;
       gl.flush();
       const poll = () => {
-        if (isDisposed) return;
+        if (isDisposed || isContextLost || fallbackActive || document.hidden) {
+          if (sync && !gl.isContextLost()) gl.deleteSync(sync);
+          return;
+        }
+        if (gl.isContextLost()) return;
         const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
         if (sync && state === gl.UNSIGNALED) {
           frameId = window.setTimeout(poll, 5);
@@ -2006,27 +2219,19 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       renderer.toneMappingExposure = exposure;
       sceneFog.color.copy(horizonColor);
 
-      // Đồng bộ mặt nước phản chiếu (Water shader) với hướng nắng & màu nắng
-      if (reflectiveWater.visible && reflectiveWater.material.uniforms) {
-        const uniforms = reflectiveWater.material.uniforms;
-        if (uniforms['time']) {
-          uniforms['time'].value += dt * 0.65;
-        }
-        if (uniforms['sunDirection']) {
-          uniforms['sunDirection'].value.copy(keyLight.position).normalize();
-        }
-        if (uniforms['sunColor']) {
-          _scratchColorB
-            .copy(keyLight.color)
-            .multiplyScalar( THREE.MathUtils.lerp(1.0, 0.18, nightFactor) );
-          uniforms['sunColor'].value.copy(_scratchColorB);
-        }
-        if (uniforms['waterColor']) {
-          _scratchColorB
-            .setHex(0x0369a1)
-            .lerp(_colNightSky, nightFactor * 0.78);
-          uniforms['waterColor'].value.copy(_scratchColorB);
-        }
+      // Đồng bộ mặt nước PBR gợn sóng động với chu kỳ Ngày / Đêm
+      if (reflectiveWater.visible) {
+        waterNormalTex.offset.x = (waterNormalTex.offset.x + dt * 0.045) % 1;
+        waterNormalTex.offset.y = (waterNormalTex.offset.y + dt * 0.028) % 1;
+        _scratchColorB
+          .setHex(0x0369a1)
+          .lerp(_colNightSky, nightFactor * 0.72);
+        reflectiveWaterMat.color.copy(_scratchColorB);
+        reflectiveWaterMat.envMapIntensity = THREE.MathUtils.lerp(
+          1.35,
+          0.35,
+          nightFactor
+        );
       }
 
       // Cập nhật mượt emissiveIntensity của cửa sổ tòa nhà và bóng đèn đường
@@ -2077,7 +2282,13 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     }
 
     function tick() {
-      if (isDisposed) return;
+      if (isDisposed || isContextLost || fallbackActive || document.hidden) {
+        return;
+      }
+      if (renderer.getContext().isContextLost()) {
+        isContextLost = true;
+        return;
+      }
       const rawDt = clock.getDelta();
       const dt = Math.min(rawDt, 0.05);
       const currentState = stateRef.current;
@@ -2450,17 +2661,15 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
         particleMesh.instanceMatrix.needsUpdate = true;
       }
 
-      if (graphicQualityRef.current === 'high' && !isSoftwareGl && composer) {
-        composer.render();
-      } else {
+      try {
         renderer.render(scene, camera);
+      } catch {
+        // Nếu GPU gặp sự cố đột ngột khi render, chuyển sang fallback 2D an toàn
+        switchToCanvasFallbackAfterContextLoss();
+        return;
       }
 
-      if (isSoftwareGl) {
-        afterDraw(tick);
-      } else {
-        frameId = requestAnimationFrame(tick);
-      }
+      scheduleNextFrame();
     }
 
     tick();
@@ -2468,9 +2677,64 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
     return () => {
       isDisposed = true;
       cancelAnimationFrame(frameId);
+      cancelAnimationFrame(resizeRafId);
       clearTimeout(frameId);
+      clearContextLostTimer();
       clearTouchLongPress();
       disposeGhostPreview();
+
+      if (fallbackCleanup) {
+        fallbackCleanup();
+        fallbackCleanup = null;
+      }
+
+      for (const group of tileStructGroupMap.values()) {
+        disposeGroupResources(group);
+        structuresGroup.remove(group);
+      }
+      tileStructGroupMap.clear();
+      tileStateSignatureMap.clear();
+
+      while (vehicleGroup.children.length > 0) {
+        const child = vehicleGroup.children[0];
+        disposeGroupResources(child);
+        vehicleGroup.remove(child);
+      }
+      while (waterShipGroup.children.length > 0) {
+        const child = waterShipGroup.children[0];
+        disposeGroupResources(child);
+        waterShipGroup.remove(child);
+      }
+      while (roadSnapPreviewGroup.children.length > 0) {
+        const child = roadSnapPreviewGroup.children[0];
+        disposeGroupResources(child);
+        roadSnapPreviewGroup.remove(child);
+      }
+
+      outerTerrain.geometry.dispose();
+      (outerTerrain.material as THREE.Material).dispose();
+      hillGeo.dispose();
+      hillMat.dispose();
+      treeTrunkGeo.dispose();
+      treeTrunkMat.dispose();
+      treeCrownGeo.dispose();
+      treeCrownMat.dispose();
+      gridLinesGeo.dispose();
+      gridLinesMat.dispose();
+      reflectiveWater.geometry.dispose();
+      reflectiveWaterMat.dispose();
+      tileGeo.dispose();
+      Object.values(sharedTileMaterials).forEach((m) => m.dispose());
+      floodGeo.dispose();
+      floodMat.dispose();
+      reservedBorderGeo.dispose();
+      reservedPostGeo.dispose();
+      reservedCyanMat.dispose();
+      reticleGeo.dispose();
+      (hoverReticle.material as THREE.Material).dispose();
+      (selectedReticle.material as THREE.Material).dispose();
+      particleGeo.dispose();
+      particleMat.dispose();
       rainGeo.dispose();
       rainMat.dispose();
       heatGeo.dispose();
@@ -2479,7 +2743,10 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
       for (const rr of rippleRings) {
         rr.mat.dispose();
       }
+      envRenderTarget.dispose();
+
       resizeObserver.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', clearKeys);
@@ -2492,9 +2759,10 @@ export const CityViewport3D: React.FC<CityViewport3DProps> = ({
         'webglcontextlost',
         onWebglContextLost
       );
-      if (composer) {
-        composer.dispose();
-      }
+      renderer.domElement.removeEventListener(
+        'webglcontextrestored',
+        onWebglContextRestored
+      );
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {

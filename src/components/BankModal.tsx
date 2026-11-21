@@ -57,7 +57,7 @@ export const BankModal: React.FC<BankModalProps> = ({
         e.preventDefault();
         e.stopPropagation();
       }}
-      className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4 pointer-events-auto"
+      className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/85 p-4 pointer-events-auto"
     >
       <section
         data-testid="bank-modal"
